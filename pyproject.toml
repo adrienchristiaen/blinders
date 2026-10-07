@@ -7,8 +7,8 @@ name = "blinders"
 version = "0.1.0"
 description = "Launch agent CLIs (Claude Code, Gemini CLI, Codex, Mistral Vibe) blind by default, then open only the repos a prompt needs."
 readme = "README.md"
-requires-python = ">=3.11"
-dependencies = []
+requires-python = ">=3.10"
+dependencies = ['tomli>=2.0; python_version < "3.11"']
 
 [project.scripts]
 blind = "blinders.cli:main"

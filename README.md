@@ -7,7 +7,7 @@ Pas de hook, pas de patch du harnais : la CLI est démarrée dans un dossier jet
 ## Installation
 
 ```bash
-pip install -e .          # Python >= 3.11, aucune dépendance
+pip install -e .          # Python >= 3.10 (tomli est installé automatiquement sur 3.10)
 blind init ~/work ~/perso # dossiers qui contiennent tes repos (écrit ~/.config/blinders/config.toml)
 ```
 

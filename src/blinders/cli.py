@@ -32,6 +32,16 @@ def _split_passthrough(argv: list[str]) -> tuple[list[str], list[str]]:
     return argv, []
 
 
+def _add_run_args(s: argparse.ArgumentParser) -> None:
+    s.add_argument("cli", help="claude, gemini, codex, vibe, or a CLI defined in config.toml")
+    s.add_argument("prompt", nargs="*", help="initial prompt; also used to select repos")
+    s.add_argument("-r", "--repos", help="comma-separated repo names (or paths); skips automatic selection")
+    s.add_argument("--max", type=int, help="max repos to open automatically")
+    s.add_argument("--primary", action="store_true", help="start inside the first opened repo instead of the blind workspace")
+    s.add_argument("--link", action="store_true", help="symlink opened repos into the blind workspace instead of using flags")
+    s.add_argument("--dry-run", action="store_true", help="print the command and exit")
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="blind", description="Start agent CLIs blind; open only the repos you need.")
     p.add_argument("--version", action="version", version=f"blinders {__version__}")
@@ -48,14 +58,7 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true")
     s.add_argument("--all", action="store_true", help="show the full ranking, not just the selection")
 
-    s = sub.add_parser("run", help="start a CLI blind, opening only the selected repos")
-    s.add_argument("cli", help="claude, gemini, codex, vibe, or a CLI defined in config.toml")
-    s.add_argument("prompt", nargs="*", help="initial prompt; also used to select repos")
-    s.add_argument("-r", "--repos", help="comma-separated repo names (or paths); skips automatic selection")
-    s.add_argument("--max", type=int, help="max repos to open automatically")
-    s.add_argument("--primary", action="store_true", help="start inside the first opened repo instead of the blind workspace")
-    s.add_argument("--link", action="store_true", help="symlink opened repos into the blind workspace instead of using flags")
-    s.add_argument("--dry-run", action="store_true", help="print the command and exit")
+    _add_run_args(sub.add_parser("run", help="start a CLI blind, opening only the selected repos"))
 
     s = sub.add_parser("audit", help="estimate what a CLI loads at startup from a directory")
     s.add_argument("paths", nargs="*", default=["."])
@@ -184,10 +187,14 @@ def cmd_clean(args, cfg: Config) -> int:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     argv, extra = _split_passthrough(argv)
-    args = _parser().parse_args(argv)
     cfg = load_config()
-    if args.cmd == "run":
+    if argv[:1] == ["run"]:
+        # Options may sit between prompt words; plain parse_args rejects that on Python < 3.12.
+        run_parser = argparse.ArgumentParser(prog="blind run")
+        _add_run_args(run_parser)
+        args = run_parser.parse_intermixed_args(argv[1:])
         return cmd_run(args, cfg, extra)
+    args = _parser().parse_args(argv)
     handlers = {"init": cmd_init, "list": cmd_list, "select": cmd_select, "audit": cmd_audit, "clean": cmd_clean}
     return handlers[args.cmd](args, cfg)
 
