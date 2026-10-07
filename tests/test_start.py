@@ -280,3 +280,25 @@ class HugePromptTests(Sandbox):
         self.assertLess(len(out), 2000)
         small = run_cli("run", "gemini", "--dry-run", "--mcp", "none", "sales-api-java lineage")
         self.assertNotIn("PROMPT.md", small[1])
+
+
+class ExtensionSkillTests(Sandbox):
+    def test_gemini_extension_skills_are_found_and_use_the_frontmatter_name(self):
+        from blinders.skills import discover
+        write_skills(self.home / ".gemini" / "skills", {"mine": "A user skill about mining."})
+        ext = self.home / ".gemini" / "extensions" / "security-pack" / "skills"
+        write_skills(ext, {"dir-name": "Audit code for security issues."})
+        (ext / "dir-name" / "SKILL.md").write_text("---\nname: security-audit\ndescription: Audit code for security issues.\n---\n")
+        found = {s.name: s for s in discover("gemini", self.home, self.cfg)}
+        self.assertEqual(sorted(found), ["mine", "security-audit"])
+        self.assertEqual(found["security-audit"].source, "extension security-pack")
+        self.assertEqual(found["mine"].source, "")
+        self.assertEqual(discover("claude", self.home, self.cfg), [])
+
+    def test_extension_skills_can_be_hidden_by_name(self):
+        from blinders.skills import discover, gemini_settings, select_skills
+        write_skills(self.home / ".gemini" / "extensions" / "pack" / "skills", {"alpha-tool": "Alpha things.", "beta-tool": "Beta things."})
+        s = discover("gemini", self.home, self.cfg)
+        plan = select_skills("use the alpha tool", s, self.cfg)
+        self.assertEqual([x.name for x in plan.kept], ["alpha-tool"])
+        self.assertEqual(gemini_settings(plan)["skills"]["disabled"], ["beta-tool"])

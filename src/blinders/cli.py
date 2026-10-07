@@ -608,7 +608,8 @@ def ui_plan(cfg: Config, repos: list[Repo], cli: str, prompt: str):
         installed = skillmod.discover(adapter.skills_style.split("-")[0], Path.home(), cfg)
         splan = skillmod.select_skills(prompt, installed, cfg, "auto")
         kept = {s.name for s in splan.kept}
-        out.skills = [Item(s.name, s.name in kept, splan.reasons.get(s.name, ""), locked=s.name in cfg.skills_always) for s in installed]
+        out.skills = [Item(s.name, s.name in kept, splan.reasons.get(s.name, "") or s.source, locked=s.name in cfg.skills_always)
+                      for s in installed]
     else:
         out.info.append(f"{adapter.name}: no skills filter available here")
     return out
@@ -871,6 +872,10 @@ def cmd_doctor(args, cfg: Config) -> int:
             row(name, f"bad adapter: {exc}")
             continue
         row(name, shutil.which(binary) or "not found")
+    for fam in ("gemini", "claude"):
+        found = skillmod.discover(fam, Path.home(), cfg)
+        ext = sum(1 for sk in found if sk.source)
+        row(f"{fam} skills", f"{len(found)} found ({ext} from extensions); built-in skills are not listed")
     row("config", str(config_dir() / "config.toml") + ("" if (config_dir() / "config.toml").is_file() else " (missing)"))
     row("roots", ", ".join(cfg.roots) or "none")
     return 0
