@@ -17,6 +17,7 @@ import subprocess
 from dataclasses import dataclass
 
 from .config import Config
+from .gitsync import graph_state, hide_graph_output
 from .scan import Repo
 
 
@@ -33,30 +34,49 @@ def graph_command(cfg: Config, repo: Repo, update: bool) -> list[str]:
     return [cfg.graphify_bin, "extract", repo.path, "--code-only", "--global", "--as", repo.name]
 
 
+def cluster_command(cfg: Config, repo: Repo) -> list[str]:
+    """``extract`` writes graph.json only; ``cluster-only`` writes GRAPH_REPORT.md.
+    ``--no-label`` keeps community names local: without it Graphify may call an LLM backend."""
+    return [cfg.graphify_bin, "cluster-only", repo.path, "--no-label", "--no-viz"]
+
+
+def _run(cmd: list[str], timeout: int) -> str:
+    """Empty string on success, else a short error."""
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return f"timeout after {timeout}s"
+    if proc.returncode == 0:
+        return ""
+    tail = (proc.stderr or proc.stdout).strip().splitlines()[-1:] or [""]
+    return tail[0][:160] or f"exit {proc.returncode}"
+
+
 def build_graphs(repos: list[Repo], cfg: Config, update: bool = False, dry_run: bool = False, log=print) -> list[GraphResult]:
+    """Missing graph: extract + cluster. Stale graph (built from another commit): update.
+    Fresh graph: skipped, unless ``update`` forces a refresh."""
     if not dry_run and shutil.which(cfg.graphify_bin) is None:
         raise FileNotFoundError(f"'{cfg.graphify_bin}' not found in PATH (install: uv tool install graphifyy)")
     results: list[GraphResult] = []
     for i, repo in enumerate(repos, 1):
-        has_graph = bool(repo.graph_report)
-        if has_graph and not update:
-            results.append(GraphResult(repo, "skipped", "graph exists (use --update to refresh)"))
-            log(f"[{i}/{len(repos)}] {repo.name}: skipped (graph exists)")
+        state = graph_state(repo.graph_report, repo.path)
+        refresh = state != "none" and (update or state == "stale")
+        if state != "none" and not refresh:
+            results.append(GraphResult(repo, "skipped", "graph is current (use --update to force)"))
+            log(f"[{i}/{len(repos)}] {repo.name}: skipped ({state})")
             continue
-        cmd = graph_command(cfg, repo, update=update and has_graph)
+        cmds = [graph_command(cfg, repo, update=True)] if refresh else [graph_command(cfg, repo, update=False), cluster_command(cfg, repo)]
         if dry_run:
-            log(f"[{i}/{len(repos)}] {' '.join(cmd)}")
+            for cmd in cmds:
+                log(f"[{i}/{len(repos)}] {' '.join(cmd)}")
             results.append(GraphResult(repo, "skipped", "dry run"))
             continue
-        log(f"[{i}/{len(repos)}] {repo.name}: {'update' if update and has_graph else 'extract'} ...")
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=cfg.graph_timeout)
-        except subprocess.TimeoutExpired:
-            results.append(GraphResult(repo, "failed", f"timeout after {cfg.graph_timeout}s"))
-            continue
-        if proc.returncode == 0:
-            results.append(GraphResult(repo, "updated" if update and has_graph else "built"))
-        else:
-            tail = (proc.stderr or proc.stdout).strip().splitlines()[-1:] or [""]
-            results.append(GraphResult(repo, "failed", tail[0][:160]))
+        log(f"[{i}/{len(repos)}] {repo.name}: {'update' if refresh else 'extract'} ...")
+        hide_graph_output(repo.path)
+        error = ""
+        for cmd in cmds:
+            error = _run(cmd, cfg.graph_timeout)
+            if error:
+                break
+        results.append(GraphResult(repo, "failed", error) if error else GraphResult(repo, "updated" if refresh else "built"))
     return results

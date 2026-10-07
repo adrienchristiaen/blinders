@@ -11,7 +11,7 @@ from blinders.config import Config
 from blinders.scan import build_index
 from blinders.workspace import create_session, prune_sessions, render_index, sessions_dir
 
-from helpers import Sandbox, make_repo
+from helpers import Sandbox, make_repo, session_of
 
 
 def run_cli(*argv):
@@ -170,7 +170,7 @@ class CliTests(Sandbox):
     def test_run_vibe_links_repos(self):
         code, out, _ = run_cli("run", "vibe", "--dry-run", "-r", "LoopDex")
         self.assertEqual(code, 0)
-        session = Path(out.split("&&")[0].replace("cd", "").strip())
+        session = session_of(out)
         self.assertTrue((session / "LoopDex").is_symlink())
 
     def test_passthrough_args(self):

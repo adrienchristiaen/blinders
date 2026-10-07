@@ -39,6 +39,7 @@ def render_index(
     mcp_dropped: list[str] | None = None,
     cli: str = "<cli>",
     skills_dropped: list[str] | None = None,
+    hints: dict[str, list[str]] | None = None,
 ) -> str:
     """``related`` holds select.Related items: related repos that stay closed."""
     related = related or []
@@ -57,6 +58,7 @@ def render_index(
             lines.append(_line(r))
             if r.graph_report:
                 lines.append(f"  code graph report (read before grepping): {r.graph_report}")
+            lines += (hints or {}).get(r.name, [])
         lines += [""]
     else:
         lines += ["## Opened repos", "- none yet", ""]
@@ -106,13 +108,14 @@ def create_session(
     skills_dropped: list[str] | None = None,
     skills_settings: dict | None = None,
     gemini_settings: dict | None = None,
+    hints: dict[str, list[str]] | None = None,
 ) -> Path:
     root = sessions_dir()
     root.mkdir(parents=True, exist_ok=True)
     # mkdtemp: unique name even for two launches in the same second, created owner-only (0700)
     session = Path(tempfile.mkdtemp(prefix=time.strftime("%Y%m%d-%H%M%S-"), dir=root))
     text = render_index(opened, closed, cfg, linked=link, related=related, mcp_dropped=mcp_dropped, cli=cli,
-                        skills_dropped=skills_dropped)
+                        skills_dropped=skills_dropped, hints=hints)
     for name in CONTEXT_FILENAMES:
         (session / name).write_text(text, encoding="utf-8")
     if mcp_config is not None:

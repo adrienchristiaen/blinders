@@ -16,7 +16,10 @@ from . import __version__
 from .adapters import DEFAULTS, Adapter, build_command, get_adapter
 from .audit import audit, format_report
 from .config import Config, config_dir, load_config
+from .gitsync import SyncResult, graph_state, sync_many
 from .graph import build_graphs
+from .hints import Hints, find_hints, render_hints
+from . import stats as statsmod
 from . import skills as skillmod
 from .mcp import McpPlan, claude_config, discover, missing_names, select_mcp
 from .scan import Repo, build_index, load_index
@@ -48,6 +51,12 @@ def _add_launch_args(s: argparse.ArgumentParser) -> None:
     s.add_argument("--primary", action="store_true", help="start inside the first opened repo instead of the blind workspace")
     s.add_argument("--link", action="store_true", help="symlink opened repos into the blind workspace instead of using flags")
     s.add_argument("--dry-run", action="store_true", help="print the command and exit")
+    s.add_argument("--sync", choices=("off", "safe", "switch"),
+                   help="before reading opened repos: off, safe (fast-forward repos already on their root branch), "
+                        "switch (check out the root branch first). Default from config ([sync] on_launch)")
+    s.add_argument("--no-sync", action="store_true", help="same as --sync off")
+    s.add_argument("--no-hints", action="store_true", help="do not add starting points from the code graph")
+    s.add_argument("--plain", action="store_true", help="start the CLI unmodified here (for comparison); still recorded in `blind stats`")
     s.add_argument("--confirm", action="store_true", help="show the plan and wait for Enter before launching")
     s.add_argument("-y", "--yes", action="store_true", help="never ask for confirmation")
 
@@ -91,6 +100,19 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("audit", help="estimate what a CLI loads at startup from a directory")
     s.add_argument("paths", nargs="*", default=["."])
     s.add_argument("--json", action="store_true")
+
+    s = sub.add_parser("sync", help="fetch, check out the root branch and fast-forward repos, then refresh stale code graphs")
+    s.add_argument("repos", nargs="*", help="repo names; empty = every indexed repo")
+    s.add_argument("--safe", action="store_true", help="do not switch branches: only fast-forward repos already on their root branch")
+    s.add_argument("--no-graph", action="store_true", help="skip the Graphify refresh")
+
+    sub.add_parser("status", help="which repos are on which branch, and whose code graph is missing or stale (local, no network)")
+
+    s = sub.add_parser("stats", help="anonymous numbers for sessions started with and without blind (safe to paste)")
+    s.add_argument("--last", type=int, default=20)
+    s.add_argument("--json", action="store_true")
+    s.add_argument("note", nargs="*", metavar="note ID key=value",
+                   help="attach numbers by hand, e.g. `blind stats note a1b2c3 first_turn_tokens=21000 input_tokens=90000 output_tokens=4000`")
 
     sub.add_parser("clean", help="remove all blind workspaces")
     return p
@@ -175,6 +197,10 @@ class LaunchPlan:
     skills_plan: skillmod.SkillPlan | None = None
     skills_note: str = ""
     extra: list[str] = field(default_factory=list)
+    sync_mode: str = "off"
+    use_hints: bool = False
+    hints: dict[str, Hints] = field(default_factory=dict)
+    prep: dict[str, int] = field(default_factory=dict)
 
 
 def make_plan(cfg: Config, adapter: Adapter, prompt: str, repos: list[Repo], opts, extra: list[str],
@@ -191,6 +217,8 @@ def make_plan(cfg: Config, adapter: Adapter, prompt: str, repos: list[Repo], opt
     lp = LaunchPlan(adapter, prompt, repos, seed, opened, related, closed,
                     link=(opts.link or adapter.dir_style == "link") and not opts.primary,
                     primary=opts.primary, extra=extra)
+    lp.sync_mode = "off" if opts.no_sync else (opts.sync or cfg.sync_on_launch)
+    lp.use_hints = cfg.hints_enabled and not opts.no_hints and bool(prompt)
 
     spec = opts.mcp or ("auto" if adapter.mcp_auto else None)
     if spec and adapter.mcp_style == "none":
@@ -266,6 +294,7 @@ def materialize(cfg: Config, lp: LaunchPlan, dry_run: bool) -> tuple[str, list[s
         mcp_config=mcp_cfg, cli=adapter.name,
         skills_dropped=[s.name for s in lp.skills_plan.dropped] if lp.skills_plan else None,
         skills_settings=skills_settings, gemini_settings=gemini_settings,
+        hints={name: render_hints(h, "") for name, h in lp.hints.items()},
     )
     if lp.primary:
         cwd, dirs = opened[0].path, [r.path for r in opened[1:]]
@@ -279,8 +308,46 @@ def materialize(cfg: Config, lp: LaunchPlan, dry_run: bool) -> tuple[str, list[s
     return cwd, cmd, session
 
 
+def _family(adapter: Adapter) -> str:
+    return adapter.skills_style.split("-")[0] if adapter.skills_style != "none" else ""
+
+
+def prepare(cfg: Config, lp: LaunchPlan, dry_run: bool) -> None:
+    """Bring opened repos up to date, refresh stale code graphs, then compute starting points.
+
+    Dry runs change nothing: no git, no Graphify, only hints from graphs that already exist."""
+    opened = lp.opened
+    if opened and not dry_run and lp.sync_mode != "off":
+        results = sync_many([r.path for r in opened], cfg, switch=lp.sync_mode == "switch")
+        by_path = {r.path: r.name for r in opened}
+        for res in results:
+            name = by_path.get(res.path, res.path)
+            if res.status == "updated":
+                _say(f"blind: sync {name}: pulled {res.moved} commit(s) on {res.branch}")
+            elif res.status in ("left-on-branch", "skipped", "failed"):
+                _say(f"blind: sync {name}: {res.status}, {res.detail}")
+            lp.prep[res.status] = lp.prep.get(res.status, 0) + 1
+    if opened and not dry_run and shutil.which(cfg.graphify_bin) is not None:
+        todo = [r for r in opened if graph_state(r.graph_report, r.path) in ("none", "stale")]
+        if todo:
+            for res in build_graphs(todo, cfg, log=lambda *_: None):
+                _say(f"blind: graph {res.repo.name}: {res.status}" + (f", {res.detail}" if res.detail else ""))
+                lp.prep["graph_" + res.status] = lp.prep.get("graph_" + res.status, 0) + 1
+            build_index(cfg)
+            for r in todo:
+                report = Path(r.path) / "graphify-out" / "GRAPH_REPORT.md"
+                r.graph_report = str(report) if report.is_file() else ""
+    if lp.use_hints:
+        for r in opened:
+            if r.graph_report:
+                h = find_hints(lp.prompt, r, cfg)
+                if h:
+                    lp.hints[r.name] = h
+
+
 def launch(cfg: Config, lp: LaunchPlan, dry_run: bool) -> int:
     try:
+        prepare(cfg, lp, dry_run)
         cwd, cmd, session = materialize(cfg, lp, dry_run)
     except LaunchError as exc:
         return _err(str(exc))
@@ -293,6 +360,8 @@ def launch(cfg: Config, lp: LaunchPlan, dry_run: bool) -> int:
         notes += f"; MCP kept: {kept}" + (f" (dropped {len(lp.mcp_plan.dropped)})" if lp.mcp_plan.dropped else "")
     if lp.skills_plan is not None:
         notes += f"; skills kept: {len(lp.skills_plan.kept)} (hidden {len(lp.skills_plan.dropped)})"
+    if lp.hints:
+        notes += f"; starting points: {sum(len(h.files) for h in lp.hints.values())} file(s)"
     for note in (lp.mcp_note, lp.skills_note):
         if note:
             notes += f"; {note}"
@@ -302,7 +371,46 @@ def launch(cfg: Config, lp: LaunchPlan, dry_run: bool) -> int:
         return 0
     if shutil.which(cmd[0]) is None:
         return _err(f"'{cmd[0]}' not found in PATH")
+    _record(cfg, lp, cwd)
     os.chdir(cwd)
+    os.execvp(cmd[0], cmd)
+    return 0  # unreachable
+
+
+def _record(cfg: Config, lp: LaunchPlan, cwd: str) -> None:
+    """Anonymous numbers for `blind stats`; never blocks a launch."""
+    try:
+        hidden = {s.name for s in lp.skills_plan.dropped} if lp.skills_plan else set()
+        mcp = lp.mcp_plan
+        rec_id = statsmod.record_launch(
+            cli=lp.adapter.name, mode="blind", cwd=cwd, prompt=lp.prompt,
+            repos_total=len(lp.repos), repos_opened=len(lp.opened),
+            mcp_total=(len(mcp.kept) + len(mcp.dropped)) if mcp else None, mcp_kept=len(mcp.kept) if mcp else None,
+            estimate=statsmod.estimate_startup(cwd, _family(lp.adapter), hidden, cfg),
+            hints_files=sum(len(h.files) for h in lp.hints.values()), sync=lp.prep,
+        )
+        _say(f"blind: session {rec_id} (compare with `blind stats`)")
+    except Exception as exc:  # noqa: BLE001 - statistics must never stop a session
+        _say(f"blind: stats not recorded ({exc})")
+
+
+def launch_plain(cfg: Config, adapter: Adapter, prompt: str, extra: list[str], dry_run: bool) -> int:
+    """The CLI exactly as it would start here, for comparison with a blind session."""
+    cmd = build_command(adapter, prompt, [], extra)
+    cwd = os.getcwd()
+    print(f"blind: plain {adapter.name} in the current directory (nothing filtered)", file=sys.stderr)
+    if dry_run:
+        print(shlex.join(cmd))
+        return 0
+    if shutil.which(cmd[0]) is None:
+        return _err(f"'{cmd[0]}' not found in PATH")
+    try:
+        rec_id = statsmod.record_launch(
+            cli=adapter.name, mode="plain", cwd=cwd, prompt=prompt, repos_total=0, repos_opened=0,
+            mcp_total=None, mcp_kept=None, estimate=statsmod.estimate_startup(cwd, _family(adapter), set(), cfg))
+        _say(f"blind: session {rec_id} (compare with `blind stats`)")
+    except Exception as exc:  # noqa: BLE001
+        _say(f"blind: stats not recorded ({exc})")
     os.execvp(cmd[0], cmd)
     return 0  # unreachable
 
@@ -453,6 +561,12 @@ def _confirm(cfg: Config, lp: LaunchPlan, opts, extra: list[str]) -> LaunchPlan 
 def cmd_start(args, cfg: Config, extra: list[str], cli: str | None) -> int:
     """``blind`` or ``blind <cli> [prompt]``: set up if needed, plan, show, confirm, launch."""
     try:
+        if args.plain:
+            adapter = get_adapter(cli or _choose_cli(cfg), cfg)
+            prompt = " ".join(args.prompt).strip()
+            if not prompt and _interactive() and not args.dry_run:
+                prompt = _ask(f"{adapter.name} prompt (empty = none): ").strip()
+            return launch_plain(cfg, adapter, prompt, extra, args.dry_run)
         cfg = setup(cfg)
         if args.max is not None:
             cfg.max_repos = args.max
@@ -461,9 +575,12 @@ def cmd_start(args, cfg: Config, extra: list[str], cli: str | None) -> int:
             repos = build_index(cfg)
         if not repos:
             return _err("no repos found under the configured roots")
-        missing = sum(1 for r in repos if not r.graph_report)
-        if missing and shutil.which(cfg.graphify_bin) is not None and not args.yes:
-            _say(f"blind: {missing} of {len(repos)} repos have no code graph yet (`blind graph --all`)")
+        if not args.yes and shutil.which(cfg.graphify_bin) is not None:
+            states = [graph_state(r.graph_report, r.path) for r in repos]
+            behind = sum(st in ("none", "stale") for st in states)
+            if behind:
+                _say(f"blind: {behind} of {len(repos)} repos have a missing or stale code graph "
+                     "(`blind sync` updates repos and graphs; opened repos are refreshed at launch)")
         adapter = get_adapter(cli or _choose_cli(cfg), cfg)
         prompt = " ".join(args.prompt).strip()
         typed = False
@@ -536,6 +653,91 @@ def cmd_graph(args, cfg: Config) -> int:
     return 1 if failed else 0
 
 
+def cmd_sync(args, cfg: Config) -> int:
+    repos = load_index(cfg)
+    if args.repos:
+        targets, missing = _resolve_forced(",".join(args.repos), repos)
+        if missing:
+            return _err(f"unknown repo(s): {', '.join(missing)}")
+    else:
+        targets = repos
+    if not targets:
+        return _err("no repos indexed: run `blind setup` first")
+    switch = not args.safe
+    _say(f"blind: syncing {len(targets)} repo(s) ({'checking out the root branch' if switch else 'safe mode, no branch switch'}) ...")
+    names = {r.path: r.name for r in targets}
+    results = sync_many([r.path for r in targets], cfg, switch=switch)
+    counts: dict[str, int] = {}
+    for res in results:
+        counts[res.status] = counts.get(res.status, 0) + 1
+        name = names.get(res.path, res.path)
+        if res.status == "updated":
+            print(f"  updated  {name}: {res.moved} commit(s) on {res.branch}")
+        elif res.status != "current":
+            print(f"  {res.status:<8} {name}: {res.detail}")
+    print("sync: " + ", ".join(f"{n} {k}" for k, n in sorted(counts.items())))
+    if args.no_graph:
+        return 1 if counts.get("failed") else 0
+    if shutil.which(cfg.graphify_bin) is None:
+        _say(f"blind: '{cfg.graphify_bin}' not installed: graphs not refreshed (uv tool install graphifyy)")
+        return 1 if counts.get("failed") else 0
+    todo = [r for r in targets if graph_state(r.graph_report, r.path) in ("none", "stale")]
+    if todo:
+        _say(f"blind: refreshing {len(todo)} code graph(s) ...")
+        out = build_graphs(todo, cfg, log=lambda *_: None)
+        for res in out:
+            if res.status == "failed":
+                print(f"  graph failed {res.repo.name}: {res.detail}")
+        print(f"graphs: {sum(r.status in ('built', 'updated') for r in out)} refreshed, {sum(r.status == 'failed' for r in out)} failed")
+        build_index(cfg)
+    else:
+        print("graphs: all current")
+    return 1 if counts.get("failed") else 0
+
+
+def cmd_status(args, cfg: Config) -> int:
+    repos = load_index(cfg)
+    if not repos:
+        return _err("no repos indexed: run `blind setup` first")
+    from .gitsync import current_branch, is_dirty
+    rows, tally = [], {"none": 0, "stale": 0, "fresh": 0, "unknown": 0}
+    for r in repos:
+        state = graph_state(r.graph_report, r.path)
+        tally[state] += 1
+        branch = current_branch(r.path) or "(detached)"
+        try:
+            dirty = is_dirty(r.path)
+        except Exception:  # noqa: BLE001
+            dirty = False
+        if state in ("none", "stale") or dirty:
+            rows.append((r.name, branch, "dirty" if dirty else "clean", state))
+    for name, branch, dirty, state in rows[:40]:
+        print(f"{name:<32} {branch:<20} {dirty:<6} graph {state}")
+    if len(rows) > 40:
+        print(f"... and {len(rows) - 40} more")
+    print(f"{len(repos)} repos: graphs {tally['fresh']} fresh, {tally['stale']} stale, {tally['none']} missing, "
+          f"{tally['unknown']} unknown. `blind sync` updates repos and graphs.")
+    return 0
+
+
+def cmd_stats(args, cfg: Config) -> int:
+    if args.note:
+        if args.note[0] != "note" or len(args.note) < 3:
+            return _err("usage: blind stats note <id> key=value ...")
+        values: dict[str, int] = {}
+        for item in args.note[2:]:
+            key, _, val = item.partition("=")
+            if not val.lstrip("-").isdigit():
+                return _err(f"not a number: {item}")
+            values[key] = int(val)
+        statsmod.add_note(args.note[1], values)
+        print(f"noted {', '.join(values)} for {args.note[1]}")
+        return 0
+    rows = statsmod.build_report(args.last)
+    print(json.dumps(rows, indent=2) if args.json else statsmod.format_report(rows))
+    return 0
+
+
 def cmd_audit(args, cfg: Config) -> int:
     reports = [audit(Path(p)) for p in args.paths]
     if args.json:
@@ -574,7 +776,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_start(args, cfg, extra, cli)
     args = _parser().parse_args(argv)
     handlers = {
-        "setup": cmd_setup, "init": cmd_init, "list": cmd_list, "select": cmd_select, "mcp": cmd_mcp,
+        "setup": cmd_setup, "sync": cmd_sync, "status": cmd_status, "stats": cmd_stats, "init": cmd_init, "list": cmd_list, "select": cmd_select, "mcp": cmd_mcp,
         "graph": cmd_graph, "audit": cmd_audit, "clean": cmd_clean,
     }
     return handlers[args.cmd](args, cfg)

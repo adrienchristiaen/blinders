@@ -32,6 +32,17 @@ Au premier lancement, `blind` demande les dossiers qui contiennent tes repos, le
 
 Pour ne rien changer à tes habitudes : `alias gemini='blind gemini'`. Le prompt tapé à la ligne de commande lance directement, sans confirmation.
 
+Mesurer avec et sans `blind` (chaque lancement est enregistré, en chiffres seulement) :
+
+```bash
+blind gemini --plain "même prompt"   # la CLI telle quelle, dans le dossier courant, enregistrée pour comparaison
+blind gemini "même prompt"           # avec blind
+blind stats                          # tableau anonyme : repos, MCP, skills, tokens de démarrage estimés, tokens du 1er tour lus dans la session de la CLI
+blind stats note <id> first_turn_tokens=21000 input_tokens=90000 output_tokens=4000   # ajouter à la main (ex. depuis /stats)
+```
+
+`blind stats` ne contient aucun nom de repo, chemin, prompt ni contenu de fichier : tu peux le coller tel quel. Les tokens réels sont lus dans les fichiers de session de la CLI (seulement les champs numériques `usage`). Format Claude Code vérifié ; format Gemini CLI supposé, non vérifié : si rien n'est trouvé, la colonne reste vide et `stats note` permet de saisir les chiffres.
+
 Commandes détaillées :
 
 ```bash
@@ -42,6 +53,10 @@ blind run claude                                                 # entièrement 
 blind run claude --primary -r jira-cli                           # démarre dans jira-cli (garde ses skills/MCP projet)
 blind run gemini --dry-run "..."                                 # affiche la commande sans lancer
 blind run gemini "..." -- --yolo                                 # options passées telles quelles à la CLI
+
+blind sync                                  # fetch + checkout de la branche racine + fast-forward de tous les repos, puis graphes à jour
+blind sync sales-api-java --safe            # un repo, sans changer de branche
+blind status                                # branche, repo modifié ou non, graphe absent ou périmé (local, sans réseau)
 
 blind select "lineage de sales-api-java"    # repos ouverts + repos liés (fermés), avec les scores
 blind list                                  # repos indexés (rôle, chemin)
@@ -98,9 +113,32 @@ Les skills installés au niveau utilisateur (`~/.claude/skills`, `~/.gemini/skil
 
 Les skills fournis par des plugins ou des extensions ne sont pas touchés. `--skills all|none|a,b` force un choix.
 
+### Deux niveaux : repo, puis fichiers
+
+1. **Repo** : quels repos ouvrir (voir plus haut).
+2. **Dans le repo** : pour chaque repo ouvert qui a un graphe Graphify, `blind` lit `graphify-out/graph.json` en local (quelques ms, aucun modèle) et note dans l'index quelques fichiers et symboles proches du prompt, plus les fichiers reliés dans le graphe :
+
+```
+- sales-api-java: /home/toi/work/sales-api-java
+  Starting points from the code graph (hints, not a verdict; check before relying on them):
+  - src/main/java/.../PricingRule.java: PricingRule (L12), applyDiscount (L40)
+  - connected to those: src/main/java/.../CheckoutService.java
+```
+
+Ce sont des points de départ, pas des réponses : 3 à 4 fichiers au plus, jamais de contenu. Les noms des symboles comptent plus que les docstrings, les tests passent après le code sauf si le prompt parle de tests. Pas de pistes si rien ne correspond. `--no-hints` les désactive. La recherche est lexicale (noms de symboles et de fichiers), pas sémantique.
+
+### Mise à jour avant lecture
+
+Au lancement, pour les repos ouverts seulement :
+
+1. `git fetch`, puis fast-forward de la branche racine (`origin/HEAD`, sinon `main`, `master`, `develop`) ;
+2. si le graphe est absent ou construit depuis un autre commit (lu dans `GRAPH_REPORT.md`, sans ouvrir `graph.json`) : `graphify update` (ou `extract` + `cluster-only` la première fois), toujours local et sans LLM.
+
+Garde-fous : jamais avec des modifications non commitées, un merge ou rebase en cours, ou un HEAD détaché ; jamais de merge commit (`--ff-only`) ; une branche qui a divergé est signalée et laissée telle quelle ; aucun mot de passe demandé. Le mode par défaut du lancement est `safe` : un repo déjà sur sa branche racine est mis à jour, un repo sur une branche de travail est laissé dessus (son graphe est construit depuis cette branche). `[sync] on_launch = "switch"` ou `--sync switch` fait le checkout de la branche racine, comme `blind sync`. `--no-sync` ou `on_launch = "off"` désactive tout. Les `--dry-run` ne touchent à rien. `graphify-out/` est ajouté à `.git/info/exclude` de chaque repo (local, jamais commité) pour ne pas salir `git status`.
+
 ### Graphify (optionnel)
 
-`blind graph <repos...>` ou `blind graph --all` lance `graphify extract <repo> --code-only --global --as <nom>` (analyse locale par AST, sans clé API, avec fusion dans le graphe global de Graphify), puis `graphify update <repo>` avec `--update`. Quand un repo a un `graphify-out/GRAPH_REPORT.md`, l'index le signale à l'agent. Rien n'est obligatoire.
+`blind graph <repos...>` ou `blind graph --all` lance `graphify extract <repo> --code-only --global --as <nom>` (analyse locale par AST, sans clé API, avec fusion dans le graphe global de Graphify), puis `graphify cluster-only <repo> --no-label --no-viz` (c'est lui qui écrit `GRAPH_REPORT.md`, `--no-label` évite tout appel à un modèle), et `graphify update <repo>` quand le graphe existe déjà et est périmé (ou avec `--update`). Quand un repo a un `graphify-out/GRAPH_REPORT.md`, l'index le signale à l'agent. Rien n'est obligatoire.
 
 ## Configuration
 
@@ -114,6 +152,16 @@ relative_threshold = 0.4   # garde les repos dont le score >= 40 % du meilleur
 default_cli = "gemini"     # CLI utilisée par un `blind` seul (sinon détection / question)
 max_skills = 5             # skills gardés visibles quand le prompt correspond
 max_related_open = 2       # repos liés ouverts automatiquement
+
+[sync]
+on_launch = "safe"         # off | safe | switch
+timeout = 60               # secondes par commande git réseau
+workers = 8                # repos synchronisés en parallèle (blind sync)
+root_branches = ["main", "master", "develop"]   # si origin/HEAD est inconnu
+
+[hints]
+enabled = true
+max_files = 4
 max_related_list = 5       # repos liés fermés affichés dans l'index
 index_max_closed = 40      # repos fermés listés dans l'index (le reste: `blind list`)
 map_globs = ["graphify-out/*.md", ".blinders/*.md"]
@@ -153,6 +201,8 @@ dir_style = "link"         # repeat | comma | link
 - Les fichiers de contexte d'un repo ajouté par `--add-dir` ne sont pas forcément chargés par la CLI. Pour garder ses skills, MCP projet et `CLAUDE.md`, utilise `--primary` (démarre dans le premier repo, sans index).
 - La sélection est lexicale, pas sémantique : un prompt sans mot commun avec un repo ne l'ouvrira pas. Nomme le repo, déclare un groupe ou ajoute un fichier de carte (`.blinders/*.md`).
 - Les relations viennent de noms cités dans les fichiers de build et de déploiement ; un nom ambigu (même artefact dans deux repos) est ignoré.
+- **Graphify** : `GRAPH_REPORT.md` n'est écrit que par `cluster-only` (l'ancienne version de `blind graph` ne le lançait pas : relance `blind sync` ou `blind graph --all --update`). Format de `graph.json` observé sur Graphify 0.9.80 ; une autre version peut changer les champs lus (`label`, `source_file`, `source_location`, `file_type`, `links`).
+- Les pistes dépendent de la qualité du graphe et des mots du prompt ; un mauvais indice est possible, d'où le libellé « hints ». Non mesuré : c'est ce que `blind stats` doit établir sur tes repos.
 - Les filtres MCP et skills ne couvrent que le niveau utilisateur, pas les plugins ni les extensions.
 - **Filtre de skills non testé en session réelle.** Pour Claude Code, `skillOverrides` vient de la documentation et du suivi d'issues (le réglage est peu documenté, et des issues signalent que `off` n'empêche pas l'appel explicite d'un skill). Pour Gemini, la clé `skills.disabled` et son effet dans les réglages du workspace n'ont pas été vérifiés, et Gemini n'applique les réglages d'un workspace que dans un dossier de confiance. Vérifie avec `blind gemini --dry-run` puis dans la session (`/skills`).
 - `blind audit` estime en caractères / 4, pas avec un vrai tokenizer, et ne mesure pas la taille des schémas d'outils MCP (seulement leur nombre).

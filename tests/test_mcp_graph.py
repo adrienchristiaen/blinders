@@ -14,7 +14,7 @@ from blinders.mcp import discover, select_mcp
 from blinders.scan import build_index, load_index
 from blinders.workspace import render_index
 
-from helpers import Sandbox
+from helpers import Sandbox, session_of
 
 
 def run_cli(*argv):
@@ -95,7 +95,7 @@ class McpTests(Sandbox):
         self.assertIn("--allowed-mcp-server-names bigquery", out)
         self.assertNotIn("github", out)
         self.assertIn("MCP kept: bigquery (dropped 2)", err)
-        session = Path(out.split("&&")[0].replace("cd", "").strip().strip("'"))
+        session = session_of(out)
         text = (session / "GEMINI.md").read_text()
         self.assertIn("## MCP servers not loaded", text)
         self.assertIn("github, jira", text)
@@ -114,7 +114,7 @@ class McpTests(Sandbox):
         self.assertNotIn("mcp", out)
         _, out, _ = run_cli("run", "claude", "--dry-run", "--mcp", "github", "-r", "sales-api")
         self.assertIn("--strict-mcp-config --mcp-config", out)
-        session = Path(out.split("&&")[0].replace("cd", "").strip().strip("'"))
+        session = session_of(out)
         conf = json.loads((session / "mcp.json").read_text())
         self.assertEqual(list(conf["mcpServers"]), ["github"])
         self.assertEqual(stat.S_IMODE((session / "mcp.json").stat().st_mode), 0o600)
@@ -182,8 +182,9 @@ class GraphTests(Sandbox):
         run_cli("graph", "sales-api", "--update")
         lines = self.calls.read_text().splitlines()
         self.assertTrue(lines[0].startswith("extract "))
+        self.assertTrue(lines[1].startswith("cluster-only ") and "--no-label" in lines[1])
         self.assertTrue(lines[-1].startswith("update "))
-        self.assertEqual(len(lines), 2)
+        self.assertEqual(len(lines), 3)
 
     def test_dry_run_runs_nothing(self):
         code, out, _ = run_cli("graph", "--all", "--dry-run")

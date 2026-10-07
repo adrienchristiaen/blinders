@@ -52,6 +52,13 @@ class Config:
     # graphify
     graphify_bin: str = "graphify"
     graph_timeout: int = 900
+    # sync (git) and hints
+    root_branches: list[str] = field(default_factory=lambda: ["main", "master", "develop"])
+    sync_on_launch: str = "safe"   # off | safe (pull only repos already on their root branch) | switch (check it out too)
+    sync_timeout: int = 60
+    sync_workers: int = 8
+    hints_enabled: bool = True
+    hints_max_files: int = 4
     # interactive entry point
     default_cli: str = ""          # used by a bare `blind`; empty = ask or autodetect
 
@@ -90,6 +97,14 @@ def load_config(path: Path | None = None) -> Config:
     mcp = data.get("mcp", {})
     cfg.mcp_always = list(mcp.get("always", []))
     cfg.mcp_keywords = {k: list(v) for k, v in mcp.get("keywords", {}).items()}
+    sync = data.get("sync", {})
+    for key, attr in (("on_launch", "sync_on_launch"), ("timeout", "sync_timeout"), ("workers", "sync_workers"),
+                      ("root_branches", "root_branches")):
+        if key in sync:
+            setattr(cfg, attr, sync[key])
+    hints = data.get("hints", {})
+    cfg.hints_enabled = bool(hints.get("enabled", cfg.hints_enabled))
+    cfg.hints_max_files = int(hints.get("max_files", cfg.hints_max_files))
     skills = data.get("skills", {})
     cfg.skills_always = list(skills.get("always", []))
     cfg.skills_keywords = {k: list(v) for k, v in skills.get("keywords", {}).items()}

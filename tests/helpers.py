@@ -66,3 +66,9 @@ class Sandbox(unittest.TestCase):
                   dirs=("cad",))
         make_repo(self.work, "jira-cli", "CLI automating ticket merge request release deploy flow.",
                   files=("pyproject.toml",))
+
+
+def session_of(out: str) -> Path:
+    """Workspace directory from a ``--dry-run`` line ``cd <dir> && <cli> ...``."""
+    import shlex
+    return Path(shlex.split(out.split(" && ")[0])[1])

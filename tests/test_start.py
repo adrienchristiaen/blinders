@@ -9,7 +9,7 @@ from unittest import mock
 from blinders import cli
 from blinders.skills import claude_settings, discover, gemini_settings, select_skills
 
-from helpers import Sandbox
+from helpers import Sandbox, session_of
 
 
 def run_cli(*argv):
@@ -88,14 +88,14 @@ class SkillTests(Sandbox):
         self.assertEqual(code, 0)
         self.assertIn("--settings", out)
         self.assertIn("skills kept: 1 (hidden 4)", err)
-        session = Path(out.split("&&")[0].replace("cd", "").strip().strip("'"))
+        session = session_of(out)
         conf = json.loads((session / "skills-settings.json").read_text())
         self.assertEqual(sorted(conf["skillOverrides"]), ["bigquery-lineage", "pdf-tools", "slides-builder", "terraform-review"])
         self.assertIn("## Skills hidden in this session", (session / "CLAUDE.md").read_text())
 
     def test_run_gemini_disables_skills_in_workspace_settings(self):
         code, out, _ = run_cli("run", "gemini", "--dry-run", "--mcp", "none", "hello")
-        session = Path(out.split("&&")[0].replace("cd", "").strip().strip("'"))
+        session = session_of(out)
         conf = json.loads((session / ".gemini" / "settings.json").read_text())
         self.assertEqual(conf["skills"]["disabled"], ["gemini-only"])
 
