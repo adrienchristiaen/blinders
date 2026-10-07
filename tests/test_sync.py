@@ -182,7 +182,7 @@ class SyncCommandTests(GitSandbox):
             f'echo "$@" >> {self.calls}\n'
             'mkdir -p "$2/graphify-out"\n'
             'c=$(git -C "$2" rev-parse HEAD | cut -c1-8)\n'
-            'printf "## Graph Freshness\\n- Built from commit: `%s`\\n" "$c" > "$2/graphify-out/GRAPH_REPORT.md"\n'
+            'printf \'## Graph Freshness\\n- Built from commit: `%s`\\n\' "$c" > "$2/graphify-out/GRAPH_REPORT.md"\n'
         )
         (self.bin / "graphify").write_text(script)
         (self.bin / "graphify").chmod(0o755)

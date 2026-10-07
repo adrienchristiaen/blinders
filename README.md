@@ -20,17 +20,30 @@ Sans l'extra `[ui]`, tout fonctionne en mode texte (`pip install -e .`). Si l'é
 `blind` est l'étape avant la vraie CLI. Elle tourne en local, sans appel de modèle, donc sans token : Gemini ou Claude démarre déjà avec seulement ce qui a été retenu.
 
 ```bash
-blind                       # assistant, puis prompt, plan, Entrée pour lancer
+blind                       # prend la main : 4 étapes (repos, graphes, sélection, carte), puis ta CLI
 blind gemini                # idem, avec la CLI choisie
 blind gemini "ton prompt"   # lance directement (--confirm pour voir le plan avant)
 blind setup                 # relance l'assistant (dossiers, index, graphes)
 ```
 
-### Interface plein écran
+### Interface plein écran : quatre étapes
 
-Avec Textual installé, `blind` (ou `blind gemini`) sans prompt sur la ligne de commande ouvre un écran : un champ de prompt, un sélecteur de CLI et trois listes à cocher (repos, serveurs MCP, skills). Les cases se cochent d'après le prompt pendant que tu tapes ; tu peux en changer à la main, et ton choix est gardé quand le prompt change. Les pistes de fichiers et les repos liés s'affichent en bas. Le champ de prompt est multi-ligne : tu peux y coller un long paragraphe, il est gardé en entier. **Entrée** lance tant que le prompt tient sur une ligne ; dès qu'il en compte plusieurs, Entrée ajoute une ligne et **Ctrl+L** lance. **Ctrl+L** (partout) ferme l'écran et lance la vraie CLI ; **Échap** annule ; **Tab** passe d'une zone à l'autre, **Espace** coche.
+Avec Textual installé, `blind` (ou `blind gemini`) sans prompt sur la ligne de commande prend la main et montre quatre étapes au fur et à mesure :
 
-Les serveurs MCP et skills listés dans `[mcp] always` / `[skills] always` restent cochés. Pour Claude Code, le filtre MCP ne s'applique que si tu décoches quelque chose (son mode strict écarte aussi plugins et connecteurs). `--no-ui` force le mode texte, et un prompt donné sur la ligne de commande lance directement sans écran.
+1. **Mise à jour des repos** : pour chaque repo, `git fetch`, checkout de la branche racine (`origin/HEAD`, sinon `main`, `master` ou `develop`), puis fast-forward. Les résultats défilent dans le journal : repos mis à jour, repos laissés tels quels et pourquoi.
+2. **Graphes de code** : un graphe Graphify par repo, créé s'il n'existe pas, mis à jour si le repo a avancé (les graphes déjà à jour sont comptés et sautés).
+3. **Sélection** : repos, serveurs MCP et skills gardés pour ta demande, cochés d'après ton prompt. Tu peux cocher ou décocher ; ton choix est conservé quand le prompt change. Les raisons, les repos liés et les pistes de fichiers sont affichés dessous.
+4. **Carte des repos choisis** : pour chaque repo gardé, lecture de son graphe et points de départ dans le repo.
+
+Ensuite l'écran se ferme et la vraie CLI démarre ; le résumé des quatre étapes reste dans ton terminal.
+
+Les étapes 1 et 2 démarrent immédiatement : **tu peux taper ou coller ton prompt pendant qu'elles tournent**. Si tu valides avant la fin, la validation est mise en file et continue toute seule.
+
+Touches : **Entrée** valide tant que le prompt tient sur une ligne ; avec plusieurs lignes (le champ est multi-ligne, un long paragraphe collé est gardé en entier), Entrée ajoute une ligne et **Ctrl+L** valide. **Ctrl+L** marche partout. **Échap** annule et arrête les étapes en cours. **Tab** change de zone, **Espace** coche.
+
+Réglages : `[sync] fleet = "switch"` (défaut : étape 1 avec checkout de la branche racine ; `safe` ne change pas de branche, `off` saute l'étape), `ttl_minutes = 30` (l'étape 1 est sautée si les repos ont été mis à jour il y a moins longtemps ; `--refresh` force), `graph_workers = 2` (graphes construits en parallèle). `--no-fleet` saute les étapes 1 et 2 ; `--no-ui` donne les mêmes étapes en mode texte. Les garde-fous de `blind sync` s'appliquent à chaque repo (jamais avec des modifications non commitées, un merge en cours ou un HEAD détaché).
+
+Les serveurs MCP et skills listés dans `[mcp] always` / `[skills] always` restent cochés. Pour Claude Code, le filtre MCP ne s'applique que si tu décoches quelque chose (son mode strict écarte aussi plugins et connecteurs). Un prompt donné sur la ligne de commande (`blind gemini "..."`) lance directement : pas d'écran, pas d'étapes 1 et 2, seulement la mise à jour des repos ouverts.
 
 Au premier lancement, `blind` demande les dossiers qui contiennent tes repos, les indexe, puis propose de construire un graphe Graphify pour chacun (local, sans LLM ; il faut `graphify` installé, sinon il l'indique et continue). Ensuite, pour chaque session :
 
@@ -158,11 +171,14 @@ scan_depth = 3
 max_repos = 3              # repos ouverts automatiquement au maximum
 relative_threshold = 0.4   # garde les repos dont le score >= 40 % du meilleur
 default_cli = "gemini"     # CLI utilisée par un `blind` seul (sinon détection / question)
+graph_workers = 2          # étape 2 : graphes construits en parallèle
 max_skills = 5             # skills gardés visibles quand le prompt correspond
 max_related_open = 2       # repos liés ouverts automatiquement
 
 [sync]
-on_launch = "safe"         # off | safe | switch
+on_launch = "safe"         # lancement direct (blind gemini "...") : off | safe | switch
+fleet = "switch"           # étape 1 d'un `blind` seul : off | safe | switch
+ttl_minutes = 30           # étape 1 sautée si les repos ont été mis à jour depuis moins longtemps
 timeout = 60               # secondes par commande git réseau
 workers = 8                # repos synchronisés en parallèle (blind sync)
 root_branches = ["main", "master", "develop"]   # si origin/HEAD est inconnu

@@ -19,6 +19,7 @@ from .config import Config, config_dir, load_config
 from .gitsync import SyncResult, graph_state, sync_many
 from .graph import build_graphs
 from .hints import Hints, find_hints, render_hints
+from .pipeline import STEP_TITLES, Event, run_graphs, run_map, run_sync
 from . import stats as statsmod
 from . import skills as skillmod
 from .mcp import McpPlan, claude_config, discover, missing_names, select_mcp
@@ -61,6 +62,8 @@ def _add_launch_args(s: argparse.ArgumentParser) -> None:
                         "switch (check out the root branch first). Default from config ([sync] on_launch)")
     s.add_argument("--no-sync", action="store_true", help="same as --sync off")
     s.add_argument("--no-hints", action="store_true", help="do not add starting points from the code graph")
+    s.add_argument("--no-fleet", action="store_true", help="skip steps 1 and 2 (update every repo, build every graph) of a bare `blind`")
+    s.add_argument("--refresh", action="store_true", help="run step 1 even if the repos were synced recently")
     s.add_argument("--no-ui", action="store_true", help="use the text prompt instead of the full-screen launcher")
     s.add_argument("--plain", action="store_true", help="start the CLI unmodified here (for comparison); still recorded in `blind stats`")
     s.add_argument("--confirm", action="store_true", help="show the plan and wait for Enter before launching")
@@ -585,7 +588,7 @@ def ui_available() -> bool:
 
 def ui_plan(cfg: Config, repos: list[Repo], cli: str, prompt: str):
     """Automatic choice for the full-screen launcher: every repo / MCP server / skill, ticked or not."""
-    from .ui import Item, UiPlan
+    from .uimodel import Item, UiPlan
     adapter = get_adapter(cli, cfg)
     seed = plan(prompt, repos, cfg) if prompt else None
     opened = {c.repo.name: c.reason for c in seed.opened} if seed else {}
@@ -636,22 +639,48 @@ def _spec_from_ui(selected: list[str], universe: list[str], when_all: str | None
     return ",".join(selected) if selected else "none"
 
 
+class FleetBackend:
+    """Feeds the full-screen launcher with the real pipeline and the real selection engine."""
+
+    def __init__(self, cfg: Config, args, repos: list[Repo]) -> None:
+        self.cfg, self.args, self.repos = cfg, args, repos
+
+    def sync(self, emit, stop) -> None:
+        if self.args.no_fleet:
+            emit(Event(1, "done", "skipped (--no-fleet)", level="warn"))
+            return
+        run_sync(self.cfg, self.repos, emit, force=self.args.refresh, should_stop=stop)
+
+    def graphs(self, emit, stop) -> None:
+        if self.args.no_fleet:
+            emit(Event(2, "done", "skipped (--no-fleet)", level="warn"))
+            return
+        self.repos = run_graphs(self.cfg, self.repos, emit, should_stop=stop)
+
+    def plan(self, cli: str, prompt: str):
+        return ui_plan(self.cfg, self.repos, cli, prompt)
+
+    def hints(self, cli: str, prompt: str, names: list[str]) -> list[str]:
+        return ui_hints(self.cfg, self.repos, prompt, names)
+
+    def map(self, prompt: str, names: list[str], emit) -> None:
+        chosen = [r for r in self.repos if r.name in set(names)]
+        run_map(self.cfg, chosen, prompt, emit)
+
+
 def run_launcher(args, cfg: Config, repos: list[Repo], cli: str | None, extra: list[str]):
-    """Full-screen choice, then the same launch path as everything else. Returns a LaunchPlan or None (cancelled)."""
+    """Full-screen four-step flow, then the same launch path as everything else.
+    Returns (LaunchPlan, recap lines), or None when cancelled."""
     from .ui import run_ui
     installed = _installed_clis(cfg)
     clis = installed or sorted(DEFAULTS)
     start = cli or (cfg.default_cli if cfg.default_cli in clis else clis[0])
-    states = [graph_state(r.graph_report, r.path) for r in repos]
-    behind = sum(s in ("none", "stale") for s in states)
-    status = (f"{len(repos)} repos · graphs: {len(repos) - behind} current, {behind} missing or stale"
-              f" · sync: {'off' if args.no_sync else (args.sync or cfg.sync_on_launch)}")
-    res = run_ui(clis, start, " ".join(args.prompt).strip(),
-                 plan_fn=lambda c, p: ui_plan(cfg, repos, c, p),
-                 hints_fn=lambda c, p, names: ui_hints(cfg, repos, p, names),
-                 status=status, total_repos=len(repos))
+    backend = FleetBackend(cfg, args, repos)
+    status = f"{len(repos)} repos · {args.sync or cfg.sync_fleet} sync"
+    res = run_ui(clis, start, " ".join(args.prompt).strip(), backend, status=status)
     if res is None:
         return None
+    repos = backend.repos
     adapter = get_adapter(res.cli, cfg)
     chosen = set(res.repos)
     forced = [r for r in repos if r.name in chosen]
@@ -663,7 +692,27 @@ def run_launcher(args, cfg: Config, repos: list[Repo], cli: str | None, extra: l
     if adapter.skills_style != "none":
         names = [s.name for s in skillmod.discover(adapter.skills_style.split("-")[0], Path.home(), cfg)]
         args.skills = _spec_from_ui(res.skills, names, "all") if names else None
-    return make_plan(cfg, adapter, res.prompt, repos, args, extra, forced=forced)
+    args.no_sync = True   # step 1 already did it for every repo
+    lp = make_plan(cfg, adapter, res.prompt, repos, args, extra, forced=forced)
+    return lp, res.recap
+
+
+def text_fleet(cfg: Config, repos: list[Repo], args) -> list[Repo]:
+    """Steps 1 and 2 without the full-screen launcher: the same work, printed line by line."""
+    def emit(ev: Event) -> None:
+        title = f"{ev.step}/4 {STEP_TITLES[ev.step]}"
+        if ev.kind == "start":
+            _say(f"{title}: {ev.text}")
+        elif ev.kind == "line":
+            mark = {"ok": "+", "warn": "~", "error": "!"}.get(ev.level, " ")
+            _say(f"    {mark} {ev.text}")
+        elif ev.kind == "done":
+            _say(f"{title}: {ev.text}")
+
+    if args.no_fleet:
+        return repos
+    run_sync(cfg, repos, emit, force=args.refresh)
+    return run_graphs(cfg, repos, emit)
 
 
 def cmd_start(args, cfg: Config, extra: list[str], cli: str | None) -> int:
@@ -683,7 +732,7 @@ def cmd_start(args, cfg: Config, extra: list[str], cli: str | None) -> int:
             repos = build_index(cfg)
         if not repos:
             return _err("no repos found under the configured roots")
-        if not args.yes and shutil.which(cfg.graphify_bin) is not None:
+        if (args.prompt or args.no_fleet) and not args.yes and shutil.which(cfg.graphify_bin) is not None:
             states = [graph_state(r.graph_report, r.path) for r in repos]
             behind = sum(st in ("none", "stale") for st in states)
             if behind:
@@ -691,14 +740,19 @@ def cmd_start(args, cfg: Config, extra: list[str], cli: str | None) -> int:
                      "(`blind sync` updates repos and graphs; opened repos are refreshed at launch)")
         if (_interactive() and ui_available() and not args.no_ui and not args.dry_run and not args.prompt
                 and not args.confirm and not args.yes):
-            lp = run_launcher(args, cfg, repos, cli, extra)
-            if lp is None:
+            got = run_launcher(args, cfg, repos, cli, extra)
+            if got is None:
                 _say("blind: cancelled")
                 return 1
+            lp, recap = got
+            for line in recap:     # the full-screen view disappears on exit: leave the four steps in the scrollback
+                _say(line)
             return launch(cfg, lp, False)
         if _interactive() and not args.prompt and not args.no_ui and not args.dry_run and not ui_available():
             _say("blind: text mode, the full-screen launcher needs Textual in this Python "
                  f"({sys.executable}): `{Path(sys.executable).name} -m pip install textual` (or `pip install -e \".[ui]\"`)")
+        if _interactive() and not args.prompt and not args.dry_run and not args.yes:
+            repos = text_fleet(cfg, repos, args)
         adapter = get_adapter(cli or _choose_cli(cfg), cfg)
         prompt = " ".join(args.prompt).strip()
         typed = False

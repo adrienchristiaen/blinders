@@ -57,6 +57,9 @@ class Config:
     sync_on_launch: str = "safe"   # off | safe (pull only repos already on their root branch) | switch (check it out too)
     sync_timeout: int = 60
     sync_workers: int = 8
+    sync_fleet: str = "switch"     # step 1 of a bare `blind`: off | safe | switch
+    sync_ttl_minutes: float = 30   # skip step 1 when the repos were synced less than this long ago
+    graph_workers: int = 2         # graphs built in parallel in step 2
     hints_enabled: bool = True
     hints_max_files: int = 4
     # interactive entry point
@@ -89,6 +92,7 @@ def load_config(path: Path | None = None) -> Config:
         "graphify_bin",
         "graph_timeout",
         "max_skills",
+        "graph_workers",
         "default_cli",
     ):
         if key in data:
@@ -98,7 +102,7 @@ def load_config(path: Path | None = None) -> Config:
     cfg.mcp_always = list(mcp.get("always", []))
     cfg.mcp_keywords = {k: list(v) for k, v in mcp.get("keywords", {}).items()}
     sync = data.get("sync", {})
-    for key, attr in (("on_launch", "sync_on_launch"), ("timeout", "sync_timeout"), ("workers", "sync_workers"),
+    for key, attr in (("on_launch", "sync_on_launch"), ("fleet", "sync_fleet"), ("ttl_minutes", "sync_ttl_minutes"), ("timeout", "sync_timeout"), ("workers", "sync_workers"),
                       ("root_branches", "root_branches")):
         if key in sync:
             setattr(cfg, attr, sync[key])

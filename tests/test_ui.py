@@ -1,12 +1,14 @@
 import asyncio
 import os
+import threading
 import unittest
 from pathlib import Path
 
 try:
     from textual import events
     from textual.widgets import SelectionList, TextArea
-    from blinders.ui import BlindApp, Item, UiPlan
+    from blinders.pipeline import Event
+    from blinders.ui import Backend, BlindApp, Item, UiPlan
     HAVE_TEXTUAL = True
 except ImportError:  # the UI is an optional extra
     HAVE_TEXTUAL = False
@@ -26,27 +28,162 @@ def run(coro):
     return asyncio.run(coro)
 
 
+if HAVE_TEXTUAL:
+    class Fake(Backend):
+        """Quick by default; ``gate`` holds step 2 until released, ``boom`` makes step 1 raise."""
+
+        def __init__(self, gate=None, boom=False, hints=None):
+            self.gate, self.boom, self.hint_fn = gate, boom, hints
+            self.map_calls, self.stop_seen = [], False
+
+        def sync(self, emit, stop):
+            if self.boom:
+                raise RuntimeError("git exploded")
+            emit(Event(1, "start", "pulling 3 repos", 0, 3))
+            emit(Event(1, "line", "alpha: pulled 2 commit(s) on main", 1, 3, "ok"))
+            emit(Event(1, "progress", "alpha", 1, 3))
+            emit(Event(1, "done", "1 updated, 2 already current", 3, 3, "ok"))
+
+        def graphs(self, emit, stop):
+            emit(Event(2, "start", "building 2 graph(s)", 0, 2))
+            if self.gate:
+                self.gate.wait(10)
+            self.stop_seen = stop()
+            emit(Event(2, "progress", "beta", 2, 2))
+            emit(Event(2, "done", "2 built or updated, 1 already current", 2, 2, "ok"))
+
+        def plan(self, cli, prompt):
+            return fake_plan(cli, prompt)
+
+        def hints(self, cli, prompt, names):
+            return self.hint_fn(cli, prompt, names) if self.hint_fn else []
+
+        def map(self, prompt, names, emit):
+            self.map_calls.append((prompt, list(names)))
+            emit(Event(4, "start", "reading 1 graph", 0, 1))
+            emit(Event(4, "line", "alpha: 2 starting point(s): src/a.py", 1, 1, "ok"))
+            emit(Event(4, "done", "2 starting point(s) in 1 of 1 repo(s)", 1, 1, "ok"))
+
+
 @unittest.skipUnless(HAVE_TEXTUAL, "textual not installed")
 class UiTests(unittest.TestCase):
-    def app(self, prompt="", hints=None):
-        return BlindApp(["gemini", "claude"], "gemini", prompt, fake_plan, hints)
+    def app(self, prompt="", backend=None):
+        return BlindApp(["gemini", "claude"], "gemini", prompt, backend or Fake())
 
-    async def settle(self, pilot):
-        await pilot.pause(0.5)
+    async def until(self, pilot, cond, timeout=6.0):
+        waited = 0.0
+        while not cond() and waited < timeout:
+            await pilot.pause(0.1)
+            waited += 0.1
+        self.assertTrue(cond(), "condition not reached in time")
+
+    async def selecting(self, pilot):
+        await self.until(pilot, lambda: pilot.app.phase == "select")
         await pilot.app.workers.wait_for_complete()
-        await pilot.pause(0.1)
+        await pilot.pause(0.2)
 
     def selected(self, app, key):
         return sorted(str(v) for v in app.query_one(f"#{key}", SelectionList).selected)
 
+    def test_steps_one_and_two_run_by_themselves_then_selection_opens(self):
+        async def go():
+            app = self.app()
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.selecting(pilot)
+                self.assertEqual([app.steps[i].status for i in (1, 2, 3, 4)], ["done", "done", "running", "pending"])
+                self.assertIn("1 updated", app.steps[1].detail)
+                self.assertTrue(app.query_one("#lists").display)
+                self.assertFalse(app.query_one("#log").display)
+        run(go())
+
+    def test_you_can_type_the_prompt_while_the_graphs_are_still_building(self):
+        async def go():
+            gate = threading.Event()
+            app = self.app(backend=Fake(gate=gate))
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.until(pilot, lambda: app.steps[2].status == "running")
+                app.query_one("#prompt", TextArea).text = "fix beta"
+                await pilot.pause(0.3)
+                self.assertEqual(app.phase, "fleet")
+                self.assertFalse(app.query_one("#lists").display)
+                gate.set()
+                await self.selecting(pilot)
+                self.assertEqual(self.selected(app, "repos"), ["beta"])
+        run(go())
+
+    def test_validating_early_is_queued_and_continues_by_itself(self):
+        async def go():
+            gate = threading.Event()
+            backend = Fake(gate=gate)
+            app = self.app("alpha", backend)
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.until(pilot, lambda: app.steps[2].status == "running")
+                await pilot.press("enter")
+                await pilot.pause(0.2)
+                self.assertTrue(app.queued)
+                self.assertIn("queued", app.steps[3].detail)
+                self.assertEqual(backend.map_calls, [])
+                gate.set()
+                await self.until(pilot, lambda: not app.is_running, timeout=8)
+            self.assertEqual(app.return_value.repos, ["alpha"])
+            self.assertEqual(backend.map_calls, [("alpha", ["alpha"])])
+        run(go())
+
+    def test_enter_runs_step_four_then_returns_choice_and_recap(self):
+        async def go():
+            backend = Fake()
+            app = self.app("beta pdf", backend)
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.selecting(pilot)
+                await pilot.press("enter")
+                await self.until(pilot, lambda: not app.is_running, timeout=8)
+            res = app.return_value
+            self.assertEqual((res.cli, res.prompt, res.repos, res.skills), ("gemini", "beta pdf", ["beta"], ["pdf"]))
+            self.assertIn("core", res.mcp)
+            self.assertEqual(backend.map_calls, [("beta pdf", ["beta"])])
+            self.assertEqual(len(res.recap), 4)
+            self.assertTrue(res.recap[0].startswith("✔ 1"))
+            self.assertIn("1 of 3 repos", res.recap[2])
+            self.assertIn("starting point", res.recap[3])
+        run(go())
+
+    def test_escape_cancels_and_stops_the_background_steps(self):
+        async def go():
+            gate = threading.Event()
+            backend = Fake(gate=gate)
+            app = self.app("alpha", backend)
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.until(pilot, lambda: app.steps[2].status == "running")
+                await pilot.press("escape")
+                gate.set()
+            self.assertIsNone(app.return_value)
+            for _ in range(40):          # the background thread reads the flag a moment after the screen closed
+                if backend.stop_seen:
+                    break
+                await asyncio.sleep(0.1)
+            self.assertTrue(backend.stop_seen)
+        run(go())
+
+    def test_an_error_in_step_one_does_not_block_the_rest(self):
+        async def go():
+            app = self.app(backend=Fake(boom=True))
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.selecting(pilot)
+                self.assertEqual(app.steps[1].status, "error")
+                self.assertIn("git exploded", app.steps[1].detail)
+                self.assertEqual(app.phase, "select")
+        run(go())
+
     def test_lists_follow_the_prompt_as_you_type(self):
         async def go():
             app = self.app()
-            async with app.run_test(size=(120, 40)) as pilot:
-                await self.settle(pilot)
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.selecting(pilot)
                 self.assertEqual(self.selected(app, "repos"), [])
                 app.query_one("#prompt", TextArea).text = "fix beta with bigquery"
-                await self.settle(pilot)
+                await pilot.pause(0.6)
+                await app.workers.wait_for_complete()
+                await pilot.pause(0.1)
                 self.assertEqual(self.selected(app, "repos"), ["beta"])
                 self.assertEqual(self.selected(app, "mcp"), ["bq", "core"])
         run(go())
@@ -54,67 +191,46 @@ class UiTests(unittest.TestCase):
     def test_manual_choice_survives_a_new_prompt(self):
         async def go():
             app = self.app("alpha")
-            async with app.run_test(size=(120, 40)) as pilot:
-                await self.settle(pilot)
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.selecting(pilot)
                 app.query_one("#repos", SelectionList).toggle("gamma")
-                app.query_one("#repos", SelectionList).toggle("alpha")   # unticked by hand
+                app.query_one("#repos", SelectionList).toggle("alpha")
                 await pilot.pause(0.1)
                 app.query_one("#prompt", TextArea).text = "alpha again"
-                await self.settle(pilot)
+                await pilot.pause(0.6)
+                await app.workers.wait_for_complete()
+                await pilot.pause(0.1)
                 self.assertEqual(self.selected(app, "repos"), ["gamma"])
-        run(go())
-
-    def test_enter_returns_the_choice_and_escape_cancels(self):
-        async def go():
-            app = self.app("beta pdf")
-            async with app.run_test(size=(120, 40)) as pilot:
-                await self.settle(pilot)
-                await pilot.press("enter")
-            res = app.return_value
-            self.assertEqual((res.cli, res.prompt, res.repos, res.skills), ("gemini", "beta pdf", ["beta"], ["pdf"]))
-            self.assertIn("core", res.mcp)
-            app2 = self.app("beta")
-            async with app2.run_test(size=(120, 40)) as pilot:
-                await self.settle(pilot)
-                await pilot.press("escape")
-            self.assertIsNone(app2.return_value)
-        run(go())
-
-    def test_enter_right_after_typing_uses_the_final_prompt(self):
-        async def go():
-            app = self.app()
-            async with app.run_test(size=(120, 40)) as pilot:
-                await self.settle(pilot)
-                app.query_one("#prompt", TextArea).text = "gamma"
-                await pilot.press("enter")          # before the debounce timer fires
-            self.assertEqual(app.return_value.repos, ["gamma"])
         run(go())
 
     def test_a_pasted_multi_line_paragraph_is_kept_whole(self):
         para = "First line about alpha.\n\nSecond paragraph with details,\n  - bullet one\n  - bullet two\nEnd."
         async def go():
             app = self.app()
-            async with app.run_test(size=(120, 40)) as pilot:
-                await self.settle(pilot)
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.selecting(pilot)
                 app.post_message(events.Paste(para))   # as a terminal paste arrives: the app hands it to the focused widget
-                await self.settle(pilot)
+                await pilot.pause(0.6)
+                await app.workers.wait_for_complete()
                 self.assertEqual(app.query_one("#prompt", TextArea).text, para)
-                self.assertEqual(self.selected(app, "repos"), ["alpha"])   # the engine saw the whole text
+                self.assertEqual(self.selected(app, "repos"), ["alpha"])
                 await pilot.press("ctrl+l")
+                await self.until(pilot, lambda: not app.is_running, timeout=8)
             self.assertEqual(app.return_value.prompt, para.strip())
         run(go())
 
     def test_enter_adds_a_line_once_the_prompt_has_several_lines(self):
         async def go():
             app = self.app("first line\nsecond line")
-            async with app.run_test(size=(120, 40)) as pilot:
-                await self.settle(pilot)
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.selecting(pilot)
                 app.query_one("#prompt", TextArea).move_cursor((1, 11))
                 await pilot.press("enter")
                 await pilot.pause(0.1)
-                self.assertTrue(app.is_running)
+                self.assertEqual(app.phase, "select")
                 self.assertEqual(app.query_one("#prompt", TextArea).text, "first line\nsecond line\n")
                 await pilot.press("ctrl+l")
+                await self.until(pilot, lambda: not app.is_running, timeout=8)
             self.assertEqual(app.return_value.prompt, "first line\nsecond line")
         run(go())
 
@@ -122,10 +238,11 @@ class UiTests(unittest.TestCase):
         long = ("Explain how alpha handles the discount. " * 2500).strip()   # about 100 KB
         async def go():
             app = self.app()
-            async with app.run_test(size=(120, 40)) as pilot:
-                await self.settle(pilot)
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.selecting(pilot)
                 app.query_one("#prompt", TextArea).text = long
                 await pilot.press("ctrl+l")
+                await self.until(pilot, lambda: not app.is_running, timeout=10)
             self.assertEqual(app.return_value.prompt, long)
             self.assertEqual(app.return_value.repos, ["alpha"])
         run(go())
@@ -133,8 +250,8 @@ class UiTests(unittest.TestCase):
     def test_always_kept_servers_cannot_be_unticked(self):
         async def go():
             app = self.app("alpha")
-            async with app.run_test(size=(120, 40)) as pilot:
-                await self.settle(pilot)
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.selecting(pilot)
                 app.query_one("#mcp", SelectionList).toggle("core")
                 await pilot.pause(0.2)
                 self.assertIn("core", self.selected(app, "mcp"))
@@ -143,41 +260,58 @@ class UiTests(unittest.TestCase):
     def test_space_toggles_the_highlighted_box(self):
         async def go():
             app = self.app("")
-            async with app.run_test(size=(120, 40)) as pilot:
-                await self.settle(pilot)
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.selecting(pilot)
                 app.query_one("#repos", SelectionList).focus()
                 await pilot.press("space")
                 await pilot.pause(0.1)
                 self.assertEqual(self.selected(app, "repos"), ["alpha"])
                 await pilot.press("ctrl+l")
+                await self.until(pilot, lambda: not app.is_running, timeout=8)
             self.assertEqual(app.return_value.repos, ["alpha"])
         run(go())
 
     def test_switching_cli_recomputes_the_server_list(self):
         async def go():
             app = self.app("github")
-            async with app.run_test(size=(120, 40)) as pilot:
-                await self.settle(pilot)
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.selecting(pilot)
                 self.assertIn("gemini-github", [str(o.value) for o in app.query_one("#mcp", SelectionList).options])
                 app.query_one("#cli").value = "claude"
-                await self.settle(pilot)
+                await pilot.pause(0.5)
+                await app.workers.wait_for_complete()
+                await pilot.pause(0.1)
                 names = [str(o.value) for o in app.query_one("#mcp", SelectionList).options]
                 self.assertIn("claude-github", names)
                 self.assertNotIn("gemini-github", names)
                 await pilot.press("ctrl+l")
+                await self.until(pilot, lambda: not app.is_running, timeout=8)
             self.assertEqual(app.return_value.cli, "claude")
         run(go())
 
-    def test_hints_and_info_are_shown(self):
+    def test_info_and_hints_are_shown_during_selection(self):
         async def go():
-            app = self.app("alpha", hints=lambda cli, p, names: [f"{names[0]}: starting points", "  src/a.py"])
-            async with app.run_test(size=(120, 40)) as pilot:
-                await self.settle(pilot)
+            backend = Fake(hints=lambda cli, p, names: [f"{names[0]}: starting points", "  src/a.py"])
+            app = self.app("alpha", backend)
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.selecting(pilot)
+                await pilot.pause(0.3)
                 info = app.query_one("#info")
                 self.assertTrue(info.display)
                 text = str(info.render())
                 self.assertIn("note: demo", text)
                 self.assertIn("src/a.py", text)
+        run(go())
+
+    def test_step_lines_are_written_to_the_log(self):
+        async def go():
+            gate = threading.Event()
+            app = self.app(backend=Fake(gate=gate))
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.until(pilot, lambda: app.steps[2].status == "running")
+                text = "\n".join(str(line.text) for line in app.query_one("#log").lines)
+                self.assertIn("alpha: pulled 2 commit(s) on main", text)
+                gate.set()
         run(go())
 
 

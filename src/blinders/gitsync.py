@@ -132,10 +132,18 @@ def _sync(path: str, cfg: Config, switch: bool) -> SyncResult:
     return SyncResult(path, "updated", "", branch, moved=int(count) if count.isdigit() else 0)
 
 
-def sync_many(paths: list[str], cfg: Config, switch: bool, log=None) -> list[SyncResult]:
+def sync_many(paths: list[str], cfg: Config, switch: bool, log=None, should_stop=None) -> list[SyncResult]:
+    """Sync in parallel; ``log`` gets each result as it completes; ``should_stop()`` cancels what has not started."""
     results: list[SyncResult] = []
     with ThreadPoolExecutor(max_workers=max(1, cfg.sync_workers)) as pool:
-        for result in pool.map(lambda p: sync_repo(p, cfg, switch), paths):
+        def one(path: str) -> SyncResult:
+            if should_stop and should_stop():
+                return SyncResult(path, "skipped", "cancelled")
+            return sync_repo(path, cfg, switch)
+
+        futures = [pool.submit(one, p) for p in paths]
+        for fut in futures:
+            result = fut.result()
             results.append(result)
             if log:
                 log(result)
