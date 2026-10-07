@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blinders"
+version = "0.1.0"
+description = "Launch agent CLIs (Claude Code, Gemini CLI, Codex, Mistral Vibe) blind by default, then open only the repos a prompt needs."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+blind = "blinders.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
