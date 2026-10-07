@@ -165,3 +165,33 @@ class RealEngineTests(Sandbox):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DiagnosticsTests(Sandbox):
+    def test_doctor_and_version_report_python_and_ui(self):
+        import io
+        from contextlib import redirect_stdout
+        from blinders import cli
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(cli.main(["doctor"]), 0)
+        self.assertIn("full-screen launcher", out.getvalue())
+        self.assertIn("python", out.getvalue())
+        self.assertIn("full-screen launcher", cli._version_text())
+
+    def test_text_fallback_says_why_the_screen_did_not_open(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from unittest import mock
+        from blinders import cli
+        self.sales_repos()
+        d = Path(os.environ["BLINDERS_CONFIG_DIR"])
+        d.mkdir(parents=True)
+        (d / "config.toml").write_text(f'roots = ["{self.work}"]\ndefault_cli = "gemini"\n')
+        err = io.StringIO()
+        with mock.patch.object(cli, "_interactive", return_value=True), \
+             mock.patch.object(cli, "ui_available", return_value=False), \
+             mock.patch.object(cli, "_ask", return_value="q"), \
+             redirect_stderr(err), redirect_stdout(io.StringIO()):
+            cli.main([])
+        self.assertIn("needs Textual in this Python", err.getvalue())

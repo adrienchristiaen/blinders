@@ -13,7 +13,7 @@ pip install -e ".[ui]"    # Python >= 3.10 ; l'extra [ui] ajoute l'interface ple
 blind                     # le premier lancement pose les questions (voir ci-dessous)
 ```
 
-Sans l'extra `[ui]`, tout fonctionne en mode texte (`pip install -e .`).
+Sans l'extra `[ui]`, tout fonctionne en mode texte (`pip install -e .`). Si l'écran plein écran ne s'ouvre pas, `blind doctor` (ou `blind --version`) indique quel Python exécute `blind` et si Textual y est installé : c'est le cas typique quand `blind` a été installé avec une autre version de Python que celle de ton `pip`.
 
 ## Utilisation
 

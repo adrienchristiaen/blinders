@@ -27,6 +27,11 @@ from .select import Plan, plan, rank
 from .workspace import create_session, prune_sessions
 
 
+def _version_text() -> str:
+    ui = "full-screen launcher: available" if ui_available() else "full-screen launcher: Textual missing"
+    return f"blinders {__version__} (python {sys.version_info.major}.{sys.version_info.minor} at {sys.executable}; {ui})"
+
+
 def _err(msg: str) -> int:
     print(f"blind: {msg}", file=sys.stderr)
     return 2
@@ -69,7 +74,7 @@ def _add_run_args(s: argparse.ArgumentParser) -> None:
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="blind", description="Start agent CLIs blind; open only the repos you need.")
-    p.add_argument("--version", action="version", version=f"blinders {__version__}")
+    p.add_argument("--version", action="version", version=_version_text())
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("setup", help="first-run wizard: pick your repo directories, index them, build code graphs")
@@ -114,6 +119,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true")
     s.add_argument("note", nargs="*", metavar="note ID key=value",
                    help="attach numbers by hand, e.g. `blind stats note a1b2c3 first_turn_tokens=21000 input_tokens=90000 output_tokens=4000`")
+
+    sub.add_parser("doctor", help="show which Python, UI, Graphify, git and CLIs blind can see")
 
     sub.add_parser("clean", help="remove all blind workspaces")
     return p
@@ -679,6 +686,9 @@ def cmd_start(args, cfg: Config, extra: list[str], cli: str | None) -> int:
                 _say("blind: cancelled")
                 return 1
             return launch(cfg, lp, False)
+        if _interactive() and not args.prompt and not args.no_ui and not args.dry_run and not ui_available():
+            _say("blind: text mode, the full-screen launcher needs Textual in this Python "
+                 f"({sys.executable}): `{Path(sys.executable).name} -m pip install textual` (or `pip install -e \".[ui]\"`)")
         adapter = get_adapter(cli or _choose_cli(cfg), cfg)
         prompt = " ".join(args.prompt).strip()
         typed = False
@@ -836,6 +846,27 @@ def cmd_stats(args, cfg: Config) -> int:
     return 0
 
 
+def cmd_doctor(args, cfg: Config) -> int:
+    def row(label: str, value: str) -> None:
+        print(f"{label:<22}{value}")
+
+    row("blinders", f"{__version__}")
+    row("python", f"{sys.version_info.major}.{sys.version_info.minor} ({sys.executable})")
+    row("full-screen launcher", "Textual found" if ui_available() else "Textual missing: pip install textual")
+    row("git", shutil.which("git") or "not found")
+    row("graphify", shutil.which(cfg.graphify_bin) or f"not found (uv tool install graphifyy)")
+    for name in sorted(_known_clis(cfg)):
+        try:
+            binary = get_adapter(name, cfg).binary
+        except (KeyError, ValueError) as exc:
+            row(name, f"bad adapter: {exc}")
+            continue
+        row(name, shutil.which(binary) or "not found")
+    row("config", str(config_dir() / "config.toml") + ("" if (config_dir() / "config.toml").is_file() else " (missing)"))
+    row("roots", ", ".join(cfg.roots) or "none")
+    return 0
+
+
 def cmd_audit(args, cfg: Config) -> int:
     reports = [audit(Path(p)) for p in args.paths]
     if args.json:
@@ -874,7 +905,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_start(args, cfg, extra, cli)
     args = _parser().parse_args(argv)
     handlers = {
-        "setup": cmd_setup, "sync": cmd_sync, "status": cmd_status, "stats": cmd_stats, "init": cmd_init, "list": cmd_list, "select": cmd_select, "mcp": cmd_mcp,
+        "setup": cmd_setup, "doctor": cmd_doctor, "sync": cmd_sync, "status": cmd_status, "stats": cmd_stats, "init": cmd_init, "list": cmd_list, "select": cmd_select, "mcp": cmd_mcp,
         "graph": cmd_graph, "audit": cmd_audit, "clean": cmd_clean,
     }
     return handlers[args.cmd](args, cfg)
