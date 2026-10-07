@@ -136,13 +136,24 @@ Les skills sont aussi choisis d'après les repos ouverts : si un mot distinctif 
 
 Les skills intégrés à une CLI n'ont pas de dossier à lire et ne sont pas touchés. `--skills all|none|a,b` force un choix.
 
-### Fichiers GEMINI.md chargés
+### Fichiers GEMINI.md chargés : un home Gemini par session
 
-Gemini charge `~/.gemini/GEMINI.md`, le `GEMINI.md` de chaque extension, ceux de chaque dossier ajouté (et, au fil des accès, ceux des sous-dossiers qu'il lit), et remonte du dossier de travail vers ses parents jusqu'à un `.git` ou au home. Dans le workspace aveugle, `blind` écrit `context.memoryBoundaryMarkers = []` (réglage documenté de Gemini 0.63 : « an empty array disables parent traversal ») et lance Gemini avec `GEMINI_CLI_TRUST_WORKSPACE=true`, sinon Gemini ignore les réglages d'un workspace non approuvé (`[gemini] trust_workspace = false` pour l'éviter). Ce qui reste chargé et que `blind` ne filtre pas : le `GEMINI.md` global, ceux des extensions (`blind gemini ... -- -e nom1,nom2` ou `-e none` pour n'en garder que certaines), et ceux des repos ouverts, ce qui est voulu. `/memory show` dans la session liste ce qui est vraiment chargé.
+Masquer un skill ou un serveur MCP par son nom ne suffit pas : Gemini charge aussi, depuis `~/.gemini`, le `GEMINI.md` global, le `GEMINI.md` de **chaque extension**, et chaque dossier listé dans `context.includeDirectories` de `settings.json` (avec son `GEMINI.md`). Vérifié sur Gemini 0.63 avec un faux home : les trois sont chargés quel que soit le workspace.
+
+Pour Gemini, `blind` construit donc un petit home par session (`<workspace>/gemini-home`, passé via `GEMINI_CLI_HOME`, que Gemini 0.63 utilise comme répertoire personnel) :
+
+- `settings.json` : le tien, sans `context.includeDirectories`, avec seulement les serveurs MCP gardés et `memoryBoundaryMarkers = []` (pas de remontée vers les dossiers parents) ;
+- `skills/` et `extensions/` : des liens vers les seuls éléments gardés ; une extension est gardée si un de ses skills est gardé, si elle déclare un serveur MCP gardé, si son nom est dans le prompt ou si elle est dans `[gemini] extensions_always` ;
+- `GEMINI.md` global : gardé par défaut (`[gemini] global_memory = false` pour le retirer) ;
+- tout le reste (connexion, historique `tmp`, dossiers approuvés, commandes) : liens vers ton vrai `~/.gemini`, donc la connexion et `gemini --resume` continuent de marcher.
+
+Ton vrai `~/.gemini` n'est jamais modifié. Essai de bout en bout avec le vrai Gemini 0.63 : il ne charge plus que l'index, le `GEMINI.md` global et celui du repo demandé ; ni la racine, ni un repo listé dans `includeDirectories`, ni une extension non retenue.
+
+`blind doctor` liste ce que ton `~/.gemini` ferait charger (global, extensions, `includeDirectories`) avec une estimation en tokens, pour voir d'où vient le poids. `--extensions auto|all|none|a,b` règle les extensions, `--no-isolate` (ou `[gemini] isolate_home = false`) rend à Gemini ton home complet. Si `settings.json` n'est pas lisible, `blind` ne filtre rien et le dit. Les commandes slash d'une extension non gardée n'existent pas dans la session.
 
 ### Modèle selon la question
 
-`blind` choisit en local (sans token) un niveau de modèle d'après le prompt : `light` pour une question courte sur au plus un repo, sans verbe de modification ; `strong` quand plusieurs signaux de conception ou de diagnostic s'accumulent (`refactor`, `architecture`, `cause racine`, `bout en bout`... plus plusieurs repos ouverts) ; sinon `standard`, qui ne passe rien et laisse la CLI choisir. Les noms viennent de `[models.<cli>]`, par défaut les alias documentés : Gemini `flash-lite` / `pro`, Claude `haiku` / `opus`. Pas de défaut pour `codex` et `vibe`. Le choix est affiché dans le plan et à l'écran de sélection. `--model default` laisse la CLI faire, `--model light|standard|strong|<nom>` force, un `-m` après `--` l'emporte, `[models] auto = false` désactive.
+`blind` choisit en local (sans token) un niveau de modèle d'après le prompt : `light` pour une question courte (point d'interrogation, « où », « quel », « explique », « tu peux me dire »...) sur au plus deux repos, sans verbe de modification ni verbe de conception (refactor, migrer, debug...) ; `strong` quand plusieurs signaux de conception ou de diagnostic s'accumulent (`refactor`, `architecture`, `cause racine`, `bout en bout`... plus plusieurs repos ouverts) ; sinon `standard`, qui ne passe rien et laisse la CLI choisir. Les noms viennent de `[models.<cli>]`, par défaut les alias documentés : Gemini `flash-lite` / `pro`, Claude `haiku` / `opus`. Pas de défaut pour `codex` et `vibe`. Le choix est affiché dans le plan et à l'écran de sélection. `--model default` laisse la CLI faire, `--model light|standard|strong|<nom>` force, un `-m` après `--` l'emporte, `[models] auto = false` désactive.
 
 ### Deux niveaux : repo, puis fichiers
 
@@ -222,6 +233,10 @@ strong = "pro"
 
 [gemini]
 trust_workspace = true     # GEMINI_CLI_TRUST_WORKSPACE=true pour le workspace aveugle
+isolate_home = true        # un home Gemini filtré par session
+global_memory = true       # garder ~/.gemini/GEMINI.md
+extensions = "auto"        # auto | all | none
+extensions_always = []     # extensions toujours gardées
 
 [adapters.vibe]            # adapter une CLI ou en ajouter une
 binary = "vibe"

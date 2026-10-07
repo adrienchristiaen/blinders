@@ -24,6 +24,7 @@ from . import stats as statsmod
 from . import skills as skillmod
 from .mcp import McpPlan, claude_config, discover, missing_names, select_mcp
 from .models import ModelChoice, choose_model
+from . import geminihome
 from .scan import Repo, build_index, load_index
 from .select import Plan, plan, rank
 from .workspace import create_session, prune_sessions
@@ -57,6 +58,8 @@ def _add_launch_args(s: argparse.ArgumentParser) -> None:
     s.add_argument("--skills", help="skills to keep visible: auto (match the prompt), all, none, or names a,b")
     s.add_argument("--model", help="model: auto (light/strong only when the prompt clearly calls for it), default (leave the CLI alone), "
                                    "light, standard, strong, or a model name")
+    s.add_argument("--extensions", help="Gemini extensions to keep: auto (those a kept skill, MCP server or the prompt needs), all, none, or names a,b")
+    s.add_argument("--no-isolate", action="store_true", help="Gemini: use your real ~/.gemini unfiltered (every extension, GEMINI.md and includeDirectories)")
     s.add_argument("--primary", action="store_true", help="start inside the first opened repo instead of the blind workspace")
     s.add_argument("--link", action="store_true", help="symlink opened repos into the blind workspace instead of using flags")
     s.add_argument("--dry-run", action="store_true", help="print the command and exit")
@@ -214,6 +217,10 @@ class LaunchPlan:
     skills_plan: skillmod.SkillPlan | None = None
     skills_note: str = ""
     model: ModelChoice | None = None
+    ext_plan: geminihome.ExtPlan | None = None
+    isolate: bool = False                       # run Gemini with a per-session home
+    env: dict[str, str] = field(default_factory=dict)
+    home_note: str = ""
     extra: list[str] = field(default_factory=list)
     sync_mode: str = "off"
     use_hints: bool = False
@@ -261,6 +268,11 @@ def make_plan(cfg: Config, adapter: Adapter, prompt: str, repos: list[Repo], opt
             raise LaunchError(f"unknown skill(s): {', '.join(bad)}")
         if installed:
             lp.skills_plan = skillmod.select_skills(prompt, installed, cfg, sspec, repos=opened)
+    if adapter.skills_style == "gemini-workspace" and cfg.gemini_isolate_home and not getattr(opts, "no_isolate", False):
+        lp.isolate = True
+        lp.ext_plan = geminihome.select_extensions(
+            prompt, geminihome.list_extensions(Path.home()), lp.skills_plan, lp.mcp_plan, cfg,
+            getattr(opts, "extensions", None) or cfg.gemini_extensions)
     if adapter.model_flag:
         lp.model = choose_model(adapter.name, prompt, len(opened), len(related), cfg, getattr(opts, "model", None))
     return lp
@@ -282,8 +294,12 @@ def describe_plan(lp: LaunchPlan) -> str:
     if lp.skills_plan is not None:
         lines.append(f"  skills kept     {names(s.name for s in lp.skills_plan.kept)}"
                      + (f"   (hidden {len(lp.skills_plan.dropped)})" if lp.skills_plan.dropped else ""))
-    if lp.model is not None and lp.model.tier != "standard":
-        lines.append(f"  model           {lp.model.model} ({lp.model.tier}: {lp.model.reason})")
+    if lp.ext_plan is not None and (lp.ext_plan.kept or lp.ext_plan.dropped):
+        lines.append(f"  extensions kept {names(e.name for e in lp.ext_plan.kept)}"
+                     + (f"   (hidden {len(lp.ext_plan.dropped)})" if lp.ext_plan.dropped else ""))
+    if lp.model is not None:
+        shown = lp.model.model or "CLI default"
+        lines.append(f"  model           {shown} ({lp.model.tier}: {lp.model.reason})")
     for note in (lp.mcp_note, lp.skills_note):
         if note:
             lines.append(f"  note            {note}")
@@ -322,6 +338,17 @@ def materialize(cfg: Config, lp: LaunchPlan, dry_run: bool) -> tuple[str, list[s
         skills_settings=skills_settings, gemini_settings=gemini_settings,
         hints={name: render_hints(h, "") for name, h in lp.hints.items()},
     )
+    if lp.isolate:
+        home = geminihome.build_home(
+            session, Path.home(), cfg,
+            skills=lp.skills_plan.kept if lp.skills_plan is not None else None,
+            extensions=lp.ext_plan.kept if lp.ext_plan is not None else None,
+            kept_mcp={s.name for s in lp.mcp_plan.kept} if lp.mcp_plan is not None else None,
+        )
+        if home is not None:
+            lp.env["GEMINI_CLI_HOME"] = str(home)
+        else:
+            lp.home_note = "~/.gemini/settings.json is unreadable: your real Gemini home is used, nothing is filtered"
     if lp.primary:
         cwd, dirs = opened[0].path, [r.path for r in opened[1:]]
     else:
@@ -395,14 +422,17 @@ def launch(cfg: Config, lp: LaunchPlan, dry_run: bool) -> int:
         notes += f"; skills kept: {len(lp.skills_plan.kept)} (hidden {len(lp.skills_plan.dropped)})"
     if lp.hints:
         notes += f"; starting points: {sum(len(h.files) for h in lp.hints.values())} file(s)"
+    if lp.ext_plan is not None and lp.ext_plan.dropped:
+        notes += f"; extensions kept: {len(lp.ext_plan.kept)} (hidden {len(lp.ext_plan.dropped)})"
     if lp.model is not None and lp.model.tier != "standard":
         notes += f"; model {lp.model.model} ({lp.model.tier})"
-    for note in (lp.mcp_note, lp.skills_note):
+    for note in (lp.mcp_note, lp.skills_note, lp.home_note):
         if note:
             notes += f"; {note}"
     print(f"blind: opened {names}{rel}; {len(lp.closed)} closed{notes}; {where}", file=sys.stderr)
+    env_prefix = "".join(f"{k}={shlex.quote(v)} " for k, v in lp.env.items())
     if dry_run:
-        print(f"cd {shlex.quote(cwd)} && {shlex.join(cmd)}")
+        print(f"cd {shlex.quote(cwd)} && {env_prefix}{shlex.join(cmd)}")
         return 0
     if shutil.which(cmd[0]) is None:
         return _err(f"'{cmd[0]}' not found in PATH")
@@ -411,6 +441,7 @@ def launch(cfg: Config, lp: LaunchPlan, dry_run: bool) -> int:
         # Without trust Gemini ignores the workspace settings above (and the folder is new every launch).
         # It trusts the folder it starts in: the blind workspace, which blind just wrote.
         os.environ["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
+    os.environ.update(lp.env)
     os.chdir(cwd)
     os.execvp(cmd[0], cmd)
     return 0  # unreachable
@@ -618,6 +649,7 @@ def ui_plan(cfg: Config, repos: list[Repo], cli: str, prompt: str):
     items += [Item(r.name, False, "") for r in rest]
     out = UiPlan(repos=items)
     out.info += [f"related, closed: {n}: {why}" for n, why in list(related.items())[:3]]
+    splan = mplan = None
 
     if adapter.mcp_style != "none":
         servers = discover(adapter.mcp_style, Path.home(), cfg)
@@ -635,10 +667,19 @@ def ui_plan(cfg: Config, repos: list[Repo], cli: str, prompt: str):
                       for s in installed]
     else:
         out.info.append(f"{adapter.name}: no skills filter available here")
+    if adapter.skills_style == "gemini-workspace" and cfg.gemini_isolate_home:
+        eplan = geminihome.select_extensions(prompt, geminihome.list_extensions(Path.home()),
+                                             splan, mplan, cfg, cfg.gemini_extensions)
+        if eplan.kept or eplan.dropped:
+            out.info.append(f"extensions: {len(eplan.kept)} kept ({', '.join(e.name for e in eplan.kept) or 'none'}), "
+                            f"{len(eplan.dropped)} hidden; their GEMINI.md files are not loaded")
+        for label, _path, tok in geminihome.memory_sources(Path.home()):
+            if tok >= 500 and label == "global":
+                out.info.append(f"global GEMINI.md is about {tok} tokens (kept; `[gemini] global_memory = false` drops it)")
     if adapter.model_flag and prompt:
         choice = choose_model(adapter.name, prompt, len(opened), len(related), cfg)
-        if choice is not None and choice.tier != "standard":
-            out.info.append(f"model: {choice.model} ({choice.tier}: {choice.reason}); --model default keeps the CLI's own")
+        if choice is not None:
+            out.info.append(f"model: {choice.model or 'CLI default'} ({choice.tier}: {choice.reason}); --model default keeps the CLI's own")
     return out
 
 
@@ -954,6 +995,12 @@ def cmd_doctor(args, cfg: Config) -> int:
         found = skillmod.discover(fam, Path.home(), cfg)
         ext = sum(1 for sk in found if sk.source)
         row(f"{fam} skills", f"{len(found)} found ({ext} from extensions); built-in skills are not listed")
+    sources = geminihome.memory_sources(Path.home())
+    if sources:
+        print("\ngemini: GEMINI.md files loaded from your user settings (est. tokens = characters / 4)")
+        for label, path, tok in sorted(sources, key=lambda s: -s[2]):
+            print(f"  {tok:>6}  {label}: {path}")
+        print("  blind keeps them out of a launch unless the extension / folder is needed (--no-isolate keeps everything)\n")
     row("config", str(config_dir() / "config.toml") + ("" if (config_dir() / "config.toml").is_file() else " (missing)"))
     row("roots", ", ".join(cfg.roots) or "none")
     return 0

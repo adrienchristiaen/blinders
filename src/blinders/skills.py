@@ -38,6 +38,8 @@ class Skill:
     name: str
     description: str
     source: str = ""     # "" for user skills, "extension <name>" for skills bundled in an extension
+    path: str = ""       # the skill's directory
+    rel_root: str = ""   # user skills: its root relative to the home directory (".gemini/skills")
     name_terms: set[str] = field(default_factory=set)  # name words and [skills.keywords]: strong signals
     terms: set[str] = field(default_factory=set)
 
@@ -63,12 +65,13 @@ def _frontmatter_name(md: Path) -> str:
     return ""
 
 
-def _skill_roots(family: str, home: Path) -> list[tuple[Path, str]]:
-    roots = [(home / rel, "") for rel in SKILL_DIRS.get(family, ())]
+def _skill_roots(family: str, home: Path) -> list[tuple[Path, str, str]]:
+    """(directory, source label, root relative to home for user skills)."""
+    roots = [(home / rel, "", rel) for rel in SKILL_DIRS.get(family, ())]
     ext_dir = EXTENSION_DIRS.get(family)
     if ext_dir and (home / ext_dir).is_dir():
         for ext in sorted((home / ext_dir).iterdir()):
-            roots.append((ext / "skills", f"extension {ext.name}"))
+            roots.append((ext / "skills", f"extension {ext.name}", ""))
     return roots
 
 
@@ -77,7 +80,7 @@ def discover(family: str, home: Path, cfg: Config) -> list[Skill]:
 
     Built-in skills that ship with a CLI have no directory to read and are not listed."""
     skills: dict[str, Skill] = {}
-    for root, source in _skill_roots(family, home):
+    for root, source, rel_root in _skill_roots(family, home):
         if not root.is_dir():
             continue
         for child in sorted(root.iterdir()):
@@ -90,7 +93,7 @@ def discover(family: str, home: Path, cfg: Config) -> list[Skill]:
             desc = _skill_description(md)
             extra = " ".join(cfg.skills_keywords.get(name, []))
             skills[name] = Skill(
-                name, desc, source,
+                name, desc, source, path=str(child), rel_root=rel_root,
                 name_terms=set(tokens(f"{name} {extra}")),
                 terms=set(tokens(desc)),
             )

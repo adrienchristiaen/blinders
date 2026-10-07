@@ -33,10 +33,19 @@ EDIT_WORDS = {
     "delete", "remove", "change", "update", "deploy", "deploie", "renomme", "rename", "genere", "generate",
     "build", "construis", "commit", "push",
 }
+# Strong words that ask for work rather than an answer: never "light", even phrased as a question.
+STRONG_ACTIONS = {
+    "refactor", "refactoring", "refactorer", "migrate", "migrer", "redesign", "debug", "debugger",
+    "deboguer", "optimiser", "optimize", "concevoir",
+}
+QUESTION_STARTS = {
+    "comment", "pourquoi", "quoi", "est", "what", "where", "how", "why", "which", "who", "does", "is", "are",
+    "peux", "pouvez", "can", "could", "pourrais", "ou", "quel", "quelle", "quels", "quelles", "combien", "qui",
+}
 LIGHT_WORDS = {
     "explique", "expliquer", "explain", "where", "ou", "quel", "quelle", "quels", "quelles", "what", "list",
     "liste", "lister", "montre", "show", "find", "trouve", "trouver", "resume", "resumer", "summarize",
-    "combien", "lis", "read", "which", "who", "qui", "dis", "tell",
+    "combien", "lis", "read", "which", "who", "qui", "dis", "tell", "dire", "savoir", "indique", "montrer",
 }
 LONG_PROMPT = 1200
 SHORT_PROMPT = 400
@@ -60,8 +69,10 @@ def classify(prompt: str, opened: int, related: int = 0) -> tuple[str, str]:
     text = " ".join(words(prompt))
     toks = set(text.split())
     strong = sorted(toks & STRONG_WORDS) + [p for p in STRONG_PHRASES if p in text]
-    edits = toks & EDIT_WORDS
+    edits = toks & (EDIT_WORDS | STRONG_ACTIONS)
     asks = toks & LIGHT_WORDS
+    first = text.split()[0] if text else ""
+    question = "?" in prompt or first in QUESTION_STARTS or bool(asks)
     score = 2 * len(strong)
     if opened >= 3:
         score += 1
@@ -72,8 +83,8 @@ def classify(prompt: str, opened: int, related: int = 0) -> tuple[str, str]:
     if score >= 3:
         why = ", ".join(strong[:3]) or "large request"
         return "strong", f"{why}; {opened} repo(s) opened"
-    if not strong and not edits and asks and len(prompt) <= SHORT_PROMPT and opened <= 1:
-        return "light", f"short question ({', '.join(sorted(asks)[:2])}), {opened} repo(s)"
+    if question and not edits and len(prompt) <= SHORT_PROMPT and opened <= 2 and related <= 2:
+        return "light", f"short question, {opened} repo(s)"
     return "standard", "default"
 
 

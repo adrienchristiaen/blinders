@@ -69,6 +69,11 @@ class Config:
     models: dict[str, dict[str, str]] = field(default_factory=dict)  # per CLI: light / standard / strong
     # Gemini only applies workspace settings in a trusted folder; the blind workspace is ours
     gemini_trust_workspace: bool = True
+    # a per-session Gemini home: only the kept skills, extensions and MCP servers, no includeDirectories
+    gemini_isolate_home: bool = True
+    gemini_keep_global_memory: bool = True   # keep ~/.gemini/GEMINI.md
+    gemini_extensions: str = "auto"          # auto | all | none
+    gemini_extensions_always: list[str] = field(default_factory=list)
 
     @property
     def root_paths(self) -> list[Path]:
@@ -117,7 +122,12 @@ def load_config(path: Path | None = None) -> Config:
     models = data.get("models", {})
     cfg.models_auto = bool(models.get("auto", cfg.models_auto))
     cfg.models = {k: {t: str(m) for t, m in v.items()} for k, v in models.items() if isinstance(v, dict)}
-    cfg.gemini_trust_workspace = bool(data.get("gemini", {}).get("trust_workspace", cfg.gemini_trust_workspace))
+    gem = data.get("gemini", {})
+    cfg.gemini_trust_workspace = bool(gem.get("trust_workspace", cfg.gemini_trust_workspace))
+    cfg.gemini_isolate_home = bool(gem.get("isolate_home", cfg.gemini_isolate_home))
+    cfg.gemini_keep_global_memory = bool(gem.get("global_memory", cfg.gemini_keep_global_memory))
+    cfg.gemini_extensions = str(gem.get("extensions", cfg.gemini_extensions))
+    cfg.gemini_extensions_always = list(gem.get("extensions_always", cfg.gemini_extensions_always))
     skills = data.get("skills", {})
     cfg.skills_always = list(skills.get("always", []))
     cfg.skills_keywords = {k: list(v) for k, v in skills.get("keywords", {}).items()}
