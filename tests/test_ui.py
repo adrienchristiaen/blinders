@@ -4,7 +4,8 @@ import unittest
 from pathlib import Path
 
 try:
-    from textual.widgets import Input, SelectionList
+    from textual import events
+    from textual.widgets import SelectionList, TextArea
     from blinders.ui import BlindApp, Item, UiPlan
     HAVE_TEXTUAL = True
 except ImportError:  # the UI is an optional extra
@@ -44,7 +45,7 @@ class UiTests(unittest.TestCase):
             async with app.run_test(size=(120, 40)) as pilot:
                 await self.settle(pilot)
                 self.assertEqual(self.selected(app, "repos"), [])
-                app.query_one("#prompt", Input).value = "fix beta with bigquery"
+                app.query_one("#prompt", TextArea).text = "fix beta with bigquery"
                 await self.settle(pilot)
                 self.assertEqual(self.selected(app, "repos"), ["beta"])
                 self.assertEqual(self.selected(app, "mcp"), ["bq", "core"])
@@ -58,7 +59,7 @@ class UiTests(unittest.TestCase):
                 app.query_one("#repos", SelectionList).toggle("gamma")
                 app.query_one("#repos", SelectionList).toggle("alpha")   # unticked by hand
                 await pilot.pause(0.1)
-                app.query_one("#prompt", Input).value = "alpha again"
+                app.query_one("#prompt", TextArea).text = "alpha again"
                 await self.settle(pilot)
                 self.assertEqual(self.selected(app, "repos"), ["gamma"])
         run(go())
@@ -84,9 +85,49 @@ class UiTests(unittest.TestCase):
             app = self.app()
             async with app.run_test(size=(120, 40)) as pilot:
                 await self.settle(pilot)
-                app.query_one("#prompt", Input).value = "gamma"
+                app.query_one("#prompt", TextArea).text = "gamma"
                 await pilot.press("enter")          # before the debounce timer fires
             self.assertEqual(app.return_value.repos, ["gamma"])
+        run(go())
+
+    def test_a_pasted_multi_line_paragraph_is_kept_whole(self):
+        para = "First line about alpha.\n\nSecond paragraph with details,\n  - bullet one\n  - bullet two\nEnd."
+        async def go():
+            app = self.app()
+            async with app.run_test(size=(120, 40)) as pilot:
+                await self.settle(pilot)
+                app.post_message(events.Paste(para))   # as a terminal paste arrives: the app hands it to the focused widget
+                await self.settle(pilot)
+                self.assertEqual(app.query_one("#prompt", TextArea).text, para)
+                self.assertEqual(self.selected(app, "repos"), ["alpha"])   # the engine saw the whole text
+                await pilot.press("ctrl+l")
+            self.assertEqual(app.return_value.prompt, para.strip())
+        run(go())
+
+    def test_enter_adds_a_line_once_the_prompt_has_several_lines(self):
+        async def go():
+            app = self.app("first line\nsecond line")
+            async with app.run_test(size=(120, 40)) as pilot:
+                await self.settle(pilot)
+                app.query_one("#prompt", TextArea).move_cursor((1, 11))
+                await pilot.press("enter")
+                await pilot.pause(0.1)
+                self.assertTrue(app.is_running)
+                self.assertEqual(app.query_one("#prompt", TextArea).text, "first line\nsecond line\n")
+                await pilot.press("ctrl+l")
+            self.assertEqual(app.return_value.prompt, "first line\nsecond line")
+        run(go())
+
+    def test_a_very_long_prompt_is_returned_intact(self):
+        long = ("Explain how alpha handles the discount. " * 2500).strip()   # about 100 KB
+        async def go():
+            app = self.app()
+            async with app.run_test(size=(120, 40)) as pilot:
+                await self.settle(pilot)
+                app.query_one("#prompt", TextArea).text = long
+                await pilot.press("ctrl+l")
+            self.assertEqual(app.return_value.prompt, long)
+            self.assertEqual(app.return_value.repos, ["alpha"])
         run(go())
 
     def test_always_kept_servers_cannot_be_unticked(self):

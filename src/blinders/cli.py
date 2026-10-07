@@ -185,6 +185,9 @@ def _resolve_forced(spec: str, repos: list[Repo]) -> tuple[list[Repo], list[str]
     return found, missing
 
 
+MAX_ARG_PROMPT_BYTES = 100_000
+
+
 class LaunchError(Exception):
     pass
 
@@ -308,8 +311,14 @@ def materialize(cfg: Config, lp: LaunchPlan, dry_run: bool) -> tuple[str, list[s
         cwd, dirs = opened[0].path, [r.path for r in opened[1:]]
     else:
         cwd, dirs = str(session), ([] if lp.link else [r.path for r in opened])
+    prompt = lp.prompt
+    if len(prompt.encode("utf-8")) > MAX_ARG_PROMPT_BYTES:
+        # One argument is capped near 128 KB on Linux: hand a huge paste over as a file instead of failing.
+        (session / "PROMPT.md").write_text(prompt, encoding="utf-8")
+        prompt = f"My full request is too long to pass directly. Read it in {session / 'PROMPT.md'} first, then carry it out."
+        _say(f"blind: prompt is {len(lp.prompt.encode('utf-8')) // 1024} KB, passed as a file: {session / 'PROMPT.md'}")
     cmd = build_command(
-        adapter, lp.prompt, dirs, lp.extra, mcp_names=mcp_names,
+        adapter, prompt, dirs, lp.extra, mcp_names=mcp_names,
         mcp_file=str(session / "mcp.json") if mcp_cfg is not None else None,
         settings_file=str(session / "skills-settings.json") if skills_settings is not None else None,
     )

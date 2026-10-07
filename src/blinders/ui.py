@@ -15,7 +15,8 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Header, Input, Select, SelectionList, Static
+from textual.message import Message
+from textual.widgets import Footer, Header, Select, SelectionList, Static, TextArea
 from textual.widgets.selection_list import Selection
 
 DEBOUNCE = 0.25
@@ -53,9 +54,10 @@ CSS = """
 Screen { background: #0c1a30; color: #ece9e1; }
 Header { background: #112343; color: #ffb84d; }
 Footer { background: #112343; }
-#top { height: 3; padding: 0 1; margin-top: 1; }
+#top { height: auto; padding: 0 1; margin-top: 1; }
 #cli { width: 18; margin-right: 1; }
-#prompt { width: 1fr; }
+#prompt { width: 1fr; height: auto; min-height: 3; max-height: 12; background: #112343; border: tall #2b4373; }
+#prompt:focus { border: tall #ffb84d; }
 #status { height: 1; padding: 0 2; color: #8fa3c4; }
 #lists { height: 1fr; padding: 0 1; }
 .panel { width: 1fr; border: round #2b4373; margin-right: 1; border-title-color: #8fa3c4; border-title-style: bold; }
@@ -66,10 +68,26 @@ SelectionList > .selection-list--button-highlighted { color: #0c1a30; background
 SelectionList > .selection-list--button-selected-highlighted { color: #ffb84d; background: #1b2f55; text-style: bold; }
 .panel > SelectionList { background: #0c1a30; border: none; }
 #info { height: auto; max-height: 10; margin: 0 2; padding: 0 1; border-left: tall #ffb84d; color: #c9d3e6; }
-Input { background: #112343; border: tall #2b4373; }
-Input:focus { border: tall #ffb84d; }
 Select { background: #112343; }
 """
+
+
+class PromptArea(TextArea):
+    """Multi-line prompt. A pasted paragraph is kept whole (a single-line input would keep only its first line).
+
+    Enter launches while the prompt is one line; once it has several lines, Enter adds a new line
+    and Ctrl+L launches."""
+
+    class Submit(Message):
+        pass
+
+    async def _on_key(self, event) -> None:
+        if event.key == "enter" and "\n" not in self.text:
+            event.prevent_default()
+            event.stop()
+            self.post_message(self.Submit())
+            return
+        await super()._on_key(event)
 
 
 def _label(item: Item) -> Text:
@@ -86,7 +104,7 @@ class BlindApp(App[UiResult | None]):
     TITLE = "blind"
     ENABLE_COMMAND_PALETTE = False
     BINDINGS = [
-        Binding("ctrl+l", "launch", "Launch"),
+        Binding("ctrl+l", "launch", "Launch", priority=True),
         Binding("escape", "cancel", "Cancel"),
         Binding("ctrl+c", "cancel", "Cancel", show=False),
     ]
@@ -106,7 +124,8 @@ class BlindApp(App[UiResult | None]):
         yield Header(show_clock=False)
         with Horizontal(id="top"):
             yield Select([(c, c) for c in self.clis], value=self.cli, allow_blank=False, id="cli")
-            yield Input(value=self.initial_prompt, placeholder="Your prompt (empty = fully blind session)", id="prompt")
+            yield PromptArea(self.initial_prompt, id="prompt", soft_wrap=True, tab_behavior="focus",
+                             placeholder="Your prompt, paste as much as you like (empty = fully blind session)")
         yield Static(self.status_text, id="status")
         with Horizontal(id="lists"):
             for key, title in (("repos", "Repos"), ("mcp", "MCP servers"), ("skills", "Skills")):
@@ -116,14 +135,14 @@ class BlindApp(App[UiResult | None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.sub_title = "Enter launch  ·  Tab move  ·  Space tick  ·  Esc cancel"
+        self.sub_title = "Enter launches a one-line prompt  ·  Ctrl+L always  ·  Tab move  ·  Space tick  ·  Esc cancel"
         for key, title in (("repos", "Repos"), ("mcp", "MCP servers"), ("skills", "Skills")):
             self.query_one(f"#panel-{key}").border_title = title
-        self.query_one("#prompt", Input).focus()
+        self.query_one("#prompt", PromptArea).focus()
         self._recompute()
 
     # --- recompute on prompt / CLI change ---------------------------------------------------------
-    def on_input_changed(self, event: Input.Changed) -> None:
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
         if self._timer is not None:
             self._timer.stop()
         self._timer = self.set_timer(DEBOUNCE, self._recompute)
@@ -136,7 +155,7 @@ class BlindApp(App[UiResult | None]):
             self._recompute()
 
     def _recompute(self) -> None:
-        prompt = self.query_one("#prompt", Input).value.strip()
+        prompt = self._prompt()
         cli = self.cli
         self.run_worker(lambda: self._work(cli, prompt), thread=True, exclusive=True, group="plan")
 
@@ -186,7 +205,7 @@ class BlindApp(App[UiResult | None]):
         self._show_info(list(self.plan.info))
         if self.hints_fn:
             names = [str(v) for v in self.query_one("#repos", SelectionList).selected]
-            prompt, cli = self.query_one("#prompt", Input).value.strip(), self.cli
+            prompt, cli = self._prompt(), self.cli
             self.run_worker(lambda: self._hints_work(cli, prompt, names), thread=True, exclusive=True, group="hints")
 
     def _hints_work(self, cli: str, prompt: str, names: list[str]) -> None:
@@ -198,25 +217,31 @@ class BlindApp(App[UiResult | None]):
         info.display = bool(lines)
         info.update(Text("\n".join(lines)))
 
+    def _prompt(self) -> str:
+        return self.query_one("#prompt", PromptArea).text.strip()
+
     # --- leaving -----------------------------------------------------------------------------------
     def result(self) -> UiResult:
         def picked(key: str) -> list[str]:
             return [str(v) for v in self.query_one(f"#{key}", SelectionList).selected]
-        return UiResult(self.cli, self.query_one("#prompt", Input).value.strip(),
-                        picked("repos"), picked("mcp"), picked("skills"))
+        return UiResult(self.cli, self._prompt(), picked("repos"), picked("mcp"), picked("skills"))
 
     def action_launch(self) -> None:
-        self.exit(self.result())
+        self._sync_then_exit()
 
     def action_cancel(self) -> None:
         self.exit(None)
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        # Make sure the lists match the prompt that was just submitted before reading them.
-        if self._computed_for != (self.cli, event.value.strip()):
-            self._timer and self._timer.stop()
-            plan = self.plan_fn(self.cli, event.value.strip())
-            self._apply(self.cli, event.value.strip(), plan)
+    def on_prompt_area_submit(self, event: PromptArea.Submit) -> None:
+        self._sync_then_exit()
+
+    def _sync_then_exit(self) -> None:
+        # Make sure the lists match the prompt as it is now before reading them (the debounce may not have fired).
+        prompt = self._prompt()
+        if self._computed_for != (self.cli, prompt):
+            if self._timer is not None:
+                self._timer.stop()
+            self._apply(self.cli, prompt, self.plan_fn(self.cli, prompt))
         self.exit(self.result())
 
 

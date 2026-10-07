@@ -263,3 +263,20 @@ class StartTests(Sandbox):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HugePromptTests(Sandbox):
+    def test_a_prompt_too_big_for_one_argument_is_passed_as_a_file(self):
+        self.sales_repos()
+        d = Path(os.environ["BLINDERS_CONFIG_DIR"])
+        d.mkdir(parents=True)
+        (d / "config.toml").write_text(f'roots = ["{self.work}"]\n')
+        big = "sales-api-java lineage " + "x" * 150_000
+        code, out, err = run_cli("run", "gemini", "--dry-run", "--mcp", "none", big)
+        self.assertEqual(code, 0)
+        self.assertIn("passed as a file", err)
+        session = session_of(out)
+        self.assertEqual((session / "PROMPT.md").read_text(), big)
+        self.assertLess(len(out), 2000)
+        small = run_cli("run", "gemini", "--dry-run", "--mcp", "none", "sales-api-java lineage")
+        self.assertNotIn("PROMPT.md", small[1])
