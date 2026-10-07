@@ -56,6 +56,7 @@ def _add_launch_args(s: argparse.ArgumentParser) -> None:
                         "switch (check out the root branch first). Default from config ([sync] on_launch)")
     s.add_argument("--no-sync", action="store_true", help="same as --sync off")
     s.add_argument("--no-hints", action="store_true", help="do not add starting points from the code graph")
+    s.add_argument("--no-ui", action="store_true", help="use the text prompt instead of the full-screen launcher")
     s.add_argument("--plain", action="store_true", help="start the CLI unmodified here (for comparison); still recorded in `blind stats`")
     s.add_argument("--confirm", action="store_true", help="show the plan and wait for Enter before launching")
     s.add_argument("-y", "--yes", action="store_true", help="never ask for confirmation")
@@ -558,6 +559,96 @@ def _confirm(cfg: Config, lp: LaunchPlan, opts, extra: list[str]) -> LaunchPlan 
         _say("  ?")
 
 
+def ui_available() -> bool:
+    try:
+        import textual  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def ui_plan(cfg: Config, repos: list[Repo], cli: str, prompt: str):
+    """Automatic choice for the full-screen launcher: every repo / MCP server / skill, ticked or not."""
+    from .ui import Item, UiPlan
+    adapter = get_adapter(cli, cfg)
+    seed = plan(prompt, repos, cfg) if prompt else None
+    opened = {c.repo.name: c.reason for c in seed.opened} if seed else {}
+    related = {r.repo.name: r.why for r in seed.related} if seed else {}
+    rest = sorted((r for r in repos if r.name not in opened and r.name not in related), key=lambda r: r.name.lower())
+    items = [Item(n, True, why) for n, why in opened.items()]
+    items += [Item(n, False, "related") for n in related]
+    items += [Item(r.name, False, "") for r in rest]
+    out = UiPlan(repos=items)
+    out.info += [f"related, closed: {n}: {why}" for n, why in list(related.items())[:3]]
+
+    if adapter.mcp_style != "none":
+        servers = discover(adapter.mcp_style, Path.home(), cfg)
+        mplan = select_mcp(prompt, servers, cfg, "auto")
+        kept = {s.name for s in mplan.kept}
+        out.mcp = [Item(s.name, s.name in kept, mplan.reasons.get(s.name, ""), locked=s.name in cfg.mcp_always) for s in servers]
+    else:
+        out.info.append(f"{adapter.name}: no MCP filter available here")
+    if adapter.skills_style != "none":
+        installed = skillmod.discover(adapter.skills_style.split("-")[0], Path.home(), cfg)
+        splan = skillmod.select_skills(prompt, installed, cfg, "auto")
+        kept = {s.name for s in splan.kept}
+        out.skills = [Item(s.name, s.name in kept, splan.reasons.get(s.name, ""), locked=s.name in cfg.skills_always) for s in installed]
+    else:
+        out.info.append(f"{adapter.name}: no skills filter available here")
+    return out
+
+
+def ui_hints(cfg: Config, repos: list[Repo], prompt: str, names: list[str]) -> list[str]:
+    by_name = {r.name: r for r in repos}
+    lines: list[str] = []
+    if not prompt or not cfg.hints_enabled:
+        return lines
+    for n in names:
+        r = by_name.get(n)
+        if r and r.graph_report:
+            h = find_hints(prompt, r, cfg)
+            if h:
+                lines.append(f"{n}: starting points")
+                lines += [f"  {f.path}" + (f"  ({', '.join(label for label, _ in f.symbols)})" if f.symbols else "") for f in h.files]
+    return lines[:10]
+
+
+def _spec_from_ui(selected: list[str], universe: list[str], when_all: str | None) -> str | None:
+    if set(selected) >= set(universe):
+        return when_all
+    return ",".join(selected) if selected else "none"
+
+
+def run_launcher(args, cfg: Config, repos: list[Repo], cli: str | None, extra: list[str]):
+    """Full-screen choice, then the same launch path as everything else. Returns a LaunchPlan or None (cancelled)."""
+    from .ui import run_ui
+    installed = _installed_clis(cfg)
+    clis = installed or sorted(DEFAULTS)
+    start = cli or (cfg.default_cli if cfg.default_cli in clis else clis[0])
+    states = [graph_state(r.graph_report, r.path) for r in repos]
+    behind = sum(s in ("none", "stale") for s in states)
+    status = (f"{len(repos)} repos · graphs: {len(repos) - behind} current, {behind} missing or stale"
+              f" · sync: {'off' if args.no_sync else (args.sync or cfg.sync_on_launch)}")
+    res = run_ui(clis, start, " ".join(args.prompt).strip(),
+                 plan_fn=lambda c, p: ui_plan(cfg, repos, c, p),
+                 hints_fn=lambda c, p, names: ui_hints(cfg, repos, p, names),
+                 status=status, total_repos=len(repos))
+    if res is None:
+        return None
+    adapter = get_adapter(res.cli, cfg)
+    chosen = set(res.repos)
+    forced = [r for r in repos if r.name in chosen]
+    args.mcp = args.skills = None
+    if adapter.mcp_style != "none":
+        names = [s.name for s in discover(adapter.mcp_style, Path.home(), cfg)]
+        # Claude only filters when something is unticked: its strict mode also drops plugins and connectors.
+        args.mcp = _spec_from_ui(res.mcp, names, "all" if adapter.mcp_auto else None) if names else None
+    if adapter.skills_style != "none":
+        names = [s.name for s in skillmod.discover(adapter.skills_style.split("-")[0], Path.home(), cfg)]
+        args.skills = _spec_from_ui(res.skills, names, "all") if names else None
+    return make_plan(cfg, adapter, res.prompt, repos, args, extra, forced=forced)
+
+
 def cmd_start(args, cfg: Config, extra: list[str], cli: str | None) -> int:
     """``blind`` or ``blind <cli> [prompt]``: set up if needed, plan, show, confirm, launch."""
     try:
@@ -581,6 +672,13 @@ def cmd_start(args, cfg: Config, extra: list[str], cli: str | None) -> int:
             if behind:
                 _say(f"blind: {behind} of {len(repos)} repos have a missing or stale code graph "
                      "(`blind sync` updates repos and graphs; opened repos are refreshed at launch)")
+        if (_interactive() and ui_available() and not args.no_ui and not args.dry_run and not args.prompt
+                and not args.confirm and not args.yes):
+            lp = run_launcher(args, cfg, repos, cli, extra)
+            if lp is None:
+                _say("blind: cancelled")
+                return 1
+            return launch(cfg, lp, False)
         adapter = get_adapter(cli or _choose_cli(cfg), cfg)
         prompt = " ".join(args.prompt).strip()
         typed = False

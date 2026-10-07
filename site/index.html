@@ -408,11 +408,11 @@ github, jira
     <div class="install">
       <div class="panel">
         <div class="step"><div><b>Install</b><code>git clone https://github.com/adrienchristiaen/blinders
-pip install -e blinders</code></div><button class="copy" type="button" data-copy="git clone https://github.com/adrienchristiaen/blinders && pip install -e blinders">Copy</button></div>
+pip install -e "blinders[ui]"</code></div><button class="copy" type="button" data-copy="git clone https://github.com/adrienchristiaen/blinders &amp;&amp; pip install -e 'blinders[ui]'">Copy</button></div>
         <div class="step"><div><b>Start it</b><code>blind</code></div><button class="copy" type="button" data-copy="blind">Copy</button></div>
         <div class="step"><div><b>Or name the CLI and the prompt</b><code>blind gemini "your prompt"</code></div><button class="copy" type="button" data-copy='blind gemini "your prompt"'>Copy</button></div>
       </div>
-      <p class="note" style="margin-top:14px">The first run asks where your repos are, indexes them and offers to build a Graphify code graph for each. Then it asks for your prompt, shows which repos, MCP servers and skills it keeps, and starts the real CLI when you press Enter. Add <code>--dry-run</code> to print the command instead. <code>blind audit &lt;folder&gt;</code> estimates what a folder loads at startup, so you can compare before and after.</p>
+      <p class="note" style="margin-top:14px">The first run asks where your repos are, indexes them and offers to build a Graphify code graph for each. Then a full-screen launcher takes your prompt and ticks the repos, MCP servers and skills it keeps, which you can change, and starts the real CLI when you press Enter. Without the <code>[ui]</code> extra it falls back to a text prompt. Add <code>--dry-run</code> to print the command instead. <code>blind audit &lt;folder&gt;</code> estimates what a folder loads at startup, so you can compare before and after.</p>
     </div>
   </div>
 </section>

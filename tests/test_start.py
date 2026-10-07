@@ -125,6 +125,7 @@ class StartTests(Sandbox):
         self.exec = mock.Mock()
         patches = [
             mock.patch.object(cli, "_interactive", return_value=True),
+            mock.patch.object(cli, "ui_available", return_value=False),
             mock.patch.object(cli, "_ask", side_effect=self._answer),
             mock.patch.object(cli.os, "execvp", self.exec),
             mock.patch.object(cli.os, "chdir"),

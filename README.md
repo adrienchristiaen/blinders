@@ -9,9 +9,11 @@ Pas de hook, pas de patch du harnais : la CLI est démarrée dans un dossier jet
 ## Installation
 
 ```bash
-pip install -e .          # Python >= 3.10 (tomli est installé automatiquement sur 3.10)
+pip install -e ".[ui]"    # Python >= 3.10 ; l'extra [ui] ajoute l'interface plein écran (Textual)
 blind                     # le premier lancement pose les questions (voir ci-dessous)
 ```
+
+Sans l'extra `[ui]`, tout fonctionne en mode texte (`pip install -e .`).
 
 ## Utilisation
 
@@ -23,6 +25,12 @@ blind gemini                # idem, avec la CLI choisie
 blind gemini "ton prompt"   # lance directement (--confirm pour voir le plan avant)
 blind setup                 # relance l'assistant (dossiers, index, graphes)
 ```
+
+### Interface plein écran
+
+Avec Textual installé, `blind` (ou `blind gemini`) sans prompt sur la ligne de commande ouvre un écran : un champ de prompt, un sélecteur de CLI et trois listes à cocher (repos, serveurs MCP, skills). Les cases se cochent d'après le prompt pendant que tu tapes ; tu peux en changer à la main, et ton choix est gardé quand le prompt change. Les pistes de fichiers et les repos liés s'affichent en bas. **Entrée** (dans le prompt) ou **Ctrl+L** ferme l'écran et lance la vraie CLI ; **Échap** annule ; **Tab** passe d'une zone à l'autre, **Espace** coche.
+
+Les serveurs MCP et skills listés dans `[mcp] always` / `[skills] always` restent cochés. Pour Claude Code, le filtre MCP ne s'applique que si tu décoches quelque chose (son mode strict écarte aussi plugins et connecteurs). `--no-ui` force le mode texte, et un prompt donné sur la ligne de commande lance directement sans écran.
 
 Au premier lancement, `blind` demande les dossiers qui contiennent tes repos, les indexe, puis propose de construire un graphe Graphify pour chacun (local, sans LLM ; il faut `graphify` installé, sinon il l'indique et continue). Ensuite, pour chaque session :
 
@@ -203,6 +211,7 @@ dir_style = "link"         # repeat | comma | link
 - Les relations viennent de noms cités dans les fichiers de build et de déploiement ; un nom ambigu (même artefact dans deux repos) est ignoré.
 - **Graphify** : `GRAPH_REPORT.md` n'est écrit que par `cluster-only` (l'ancienne version de `blind graph` ne le lançait pas : relance `blind sync` ou `blind graph --all --update`). Format de `graph.json` observé sur Graphify 0.9.80 ; une autre version peut changer les champs lus (`label`, `source_file`, `source_location`, `file_type`, `links`).
 - Les pistes dépendent de la qualité du graphe et des mots du prompt ; un mauvais indice est possible, d'où le libellé « hints ». Non mesuré : c'est ce que `blind stats` doit établir sur tes repos.
+- **Interface plein écran** : testée avec le pilote de test de Textual 8.2 et sur une capture rendue ici, pas dans ton terminal. Le rendu dépend du terminal (couleurs, souris, SSH).
 - Les filtres MCP et skills ne couvrent que le niveau utilisateur, pas les plugins ni les extensions.
 - **Filtre de skills non testé en session réelle.** Pour Claude Code, `skillOverrides` vient de la documentation et du suivi d'issues (le réglage est peu documenté, et des issues signalent que `off` n'empêche pas l'appel explicite d'un skill). Pour Gemini, la clé `skills.disabled` et son effet dans les réglages du workspace n'ont pas été vérifiés, et Gemini n'applique les réglages d'un workspace que dans un dossier de confiance. Vérifie avec `blind gemini --dry-run` puis dans la session (`/skills`).
 - `blind audit` estime en caractères / 4, pas avec un vrai tokenizer, et ne mesure pas la taille des schémas d'outils MCP (seulement leur nombre).
@@ -214,5 +223,6 @@ dir_style = "link"         # repeat | comma | link
 ## Tests
 
 ```bash
+pip install -e ".[ui]"   # sinon les tests de l'interface sont ignorés
 PYTHONPATH=src:tests python3 -m unittest discover -s tests
 ```
