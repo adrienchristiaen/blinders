@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Foveate: start your coding agents blind</title>
+<meta name="description" content="Foveate starts Claude Code, Gemini CLI, Codex or Mistral Vibe with a short index of your repos instead of all of them, then opens only the repos, related repos and MCP servers your prompt needs.">
+<meta name="theme-color" content="#0c1a30">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230c1a30'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%238493b0' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%23ffb84d'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  color-scheme: dark;
+  --ground: #0c1a30;
+  --panel: #112343;
+  --panel-deep: #0e1d38;
+  --line: #22365a;
+  --line-soft: #182a49;
+  --ink: #ece9e1;
+  --ink-2: #aab6cc;
+  --ink-3: #8493b0;
+  --focus: #ffb84d;
+  --focus-soft: rgba(255, 184, 77, .12);
+  --ok: #6fd3a5;
+  --sans: "Geist", "Helvetica Neue", Arial, sans-serif;
+  --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  color: var(--ink);
+  font: 400 17px/1.6 var(--sans);
+  background: radial-gradient(rgba(255,255,255,.05) 1px, transparent 1px) 0 0 / 18px 18px, var(--ground);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; text-decoration-color: var(--ink-3); text-underline-offset: 3px; }
+a:hover { text-decoration-color: var(--focus); }
+code, pre, .mono { font-family: var(--mono); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 4px; }
+.skip { position: absolute; left: -999px; top: 8px; background: var(--focus); color: #1a1204; padding: 8px 14px; border-radius: 8px; z-index: 20; }
+.skip:focus { left: 12px; }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+
+/* nav */
+.nav { position: sticky; top: 0; z-index: 10; background: rgba(12, 26, 48, .82); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line-soft); }
+.nav .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 60px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 500; font-size: 18px; letter-spacing: -.01em; text-decoration: none; }
+.nav ul { display: flex; gap: 26px; list-style: none; margin: 0; padding: 0; font-size: 15px; color: var(--ink-2); }
+.nav ul a { text-decoration: none; }
+.nav ul a:hover { color: var(--ink); }
+.gh { font-size: 15px; border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; text-decoration: none; }
+.gh:hover { border-color: var(--focus); }
+
+/* hero */
+.hero { overflow-x: clip; display: grid; gap: 48px; align-items: center; padding: 72px 0 80px; grid-template-columns: 1.02fr .98fr; position: relative; }
+.hero::before { content: ""; position: absolute; right: -8%; top: -6%; width: 58%; height: 88%; background: radial-gradient(closest-side, rgba(255,184,77,.13), transparent); pointer-events: none; }
+.hero > * { position: relative; min-width: 0; }
+h1 { margin: 0; font-weight: 500; font-size: clamp(38px, 5.4vw, 64px); line-height: 1.04; letter-spacing: -.035em; text-wrap: balance; }
+h1 span { display: block; color: var(--ink-3); }
+.lede { margin: 24px 0 0; max-width: 58ch; font-size: 19px; color: var(--ink-2); }
+.chips { display: flex; flex-wrap: wrap; gap: 10px; margin: 26px 0 0; padding: 0; list-style: none; }
+.chip { border: 1px solid var(--line); background: rgba(17,35,67,.7); color: var(--ink-2); border-radius: 999px; padding: 5px 14px; font: 500 13px/1.4 var(--mono); }
+.note { margin: 14px 0 0; font-size: 14px; color: var(--ink-3); max-width: 60ch; }
+.note code { color: var(--ink-2); }
+
+/* command line with copy button */
+.cmd { display: flex; align-items: stretch; max-width: 600px; margin-top: 30px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.cmd code { flex: 1; min-width: 0; padding: 14px 16px; font-size: 13.5px; line-height: 1.7; white-space: pre; overflow-x: auto; color: var(--ink); }
+.cmd code i { font-style: normal; color: var(--ink-3); user-select: none; }
+.copy { appearance: none; border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--ink-2); font: 500 13px var(--mono); padding: 0 16px; cursor: pointer; border-radius: 0 10px 10px 0; min-width: 78px; }
+.copy:hover { color: var(--ink); background: var(--focus-soft); }
+
+/* the foveated index */
+.fovea { margin: 0; border: 1px solid var(--line); border-radius: 14px; background: rgba(14, 29, 56, .92); box-shadow: 0 30px 80px rgba(2, 8, 20, .55); overflow: hidden; }
+.fovea-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); font: 500 12.5px var(--mono); color: var(--ink-3); }
+.fovea-bar b { display: inline-flex; align-items: center; gap: 9px; color: var(--focus); font-weight: 500; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--focus); box-shadow: 0 0 12px var(--focus); }
+.prompt { padding: 14px 16px 6px; font: 13px/1.5 var(--mono); color: var(--ink-2); overflow-x: auto; white-space: nowrap; }
+.prompt i { font-style: normal; color: var(--ink-3); }
+.rows { padding: 6px 0 10px; }
+.row { display: grid; grid-template-columns: 78px 1fr; gap: 12px; padding: 7px 16px; font: 13px/1.5 var(--mono); white-space: nowrap; filter: blur(var(--b, 0px)); opacity: var(--o, 1); transition: filter .25s ease, opacity .25s ease; animation: focus-pull .9s cubic-bezier(.2,.7,.2,1) backwards; animation-delay: calc(var(--i, 0) * 90ms); }
+.row:hover, .fovea:focus-visible .row { filter: blur(0); opacity: 1; }
+.row .k { color: var(--ink-3); }
+.row .n { color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
+.row .n small { color: var(--ink-3); font-size: inherit; margin-left: 10px; }
+.row.open { background: rgba(255,255,255,.055); box-shadow: inset 2px 0 0 var(--focus); }
+.row.open .k { color: var(--focus); }
+.row.rel .k { color: var(--ink-2); }
+@keyframes focus-pull { from { filter: blur(10px); opacity: 0; } }
+.fovea figcaption { padding: 10px 16px 12px; border-top: 1px solid var(--line); font-size: 13px; color: var(--ink-3); }
+
+/* sections */
+.section { padding: 76px 0; border-top: 1px solid var(--line-soft); }
+.head { margin-bottom: 36px; max-width: 64ch; }
+h2 { margin: 0; font-weight: 500; font-size: clamp(26px, 3.5vw, 38px); line-height: 1.12; letter-spacing: -.02em; text-wrap: balance; }
+h2 span { color: var(--ink-3); }
+.head p { margin: 16px 0 0; color: var(--ink-2); }
+p { margin: 0 0 1em; }
+.panel { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); min-width: 0; }
+.panel h3 { margin: 0; padding: 14px 18px; border-bottom: 1px solid var(--line); font-size: 15px; font-weight: 500; }
+.panel pre { margin: 0; padding: 16px 18px; font-size: 13px; line-height: 1.75; overflow-x: auto; color: var(--ink-2); }
+.panel pre b { font-weight: 500; color: var(--ink); }
+.panel pre em { font-style: normal; color: var(--focus); }
+.panel pre s { text-decoration: none; color: var(--ink-3); }
+
+/* before / after */
+.versus { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.versus .panel p { margin: 0; padding: 0 18px 18px; color: var(--ink-2); font-size: 15px; }
+.versus .after { border-color: rgba(255,184,77,.45); }
+
+/* how it works: a real sequence */
+.steps { list-style: none; margin: 0; padding: 0; counter-reset: s; display: grid; gap: 0; }
+.steps li { display: grid; grid-template-columns: 56px minmax(0, 1fr) minmax(0, 1.1fr); gap: 24px; padding: 28px 0; border-top: 1px solid var(--line-soft); align-items: start; counter-increment: s; }
+.steps li:first-child { border-top: 0; padding-top: 0; }
+.steps li::before { content: counter(s); font: 500 15px var(--mono); color: var(--focus); border: 1px solid var(--line); width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; }
+.steps h3 { margin: 0 0 6px; font-size: 20px; font-weight: 500; letter-spacing: -.01em; }
+.steps p { margin: 0; color: var(--ink-2); font-size: 16px; }
+
+/* related repos */
+.graph { display: grid; grid-template-columns: minmax(0, 1fr) 150px minmax(0, 1fr) 150px minmax(0, 1fr); align-items: center; margin-bottom: 28px; }
+.node { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 14px 16px; font: 13.5px/1.4 var(--mono); min-width: 0; overflow-wrap: anywhere; }
+.node small { display: block; margin-top: 4px; color: var(--ink-3); font-size: 12.5px; }
+.node.hub { border-color: var(--focus); background: var(--panel-deep); box-shadow: 0 0 0 1px rgba(255,184,77,.25), 0 0 30px rgba(255,184,77,.14); }
+.link { text-align: center; font: 12.5px/1.35 var(--mono); color: var(--ink-3); padding: 0 8px; position: relative; }
+.link::after { content: ""; display: block; height: 1px; margin-top: 8px; background: linear-gradient(90deg, var(--line), var(--ink-3), var(--line)); }
+.alone { margin-top: 18px; display: inline-block; border: 1px dashed var(--line); border-radius: 10px; padding: 10px 14px; font: 13px var(--mono); color: var(--ink-3); }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.pair .panel div { padding: 16px 18px 18px; }
+.pair .panel div p { margin: 0 0 12px; color: var(--ink-2); font-size: 15px; }
+.pair code.q { display: block; margin-bottom: 14px; font-size: 13.5px; color: var(--ink); }
+.tag { display: inline-block; margin-right: 8px; padding: 1px 8px; border-radius: 999px; font: 500 12px var(--mono); border: 1px solid var(--line); color: var(--ink-2); }
+.tag.o { border-color: var(--focus); color: var(--focus); }
+
+/* mcp */
+.two { display: grid; grid-template-columns: 1.05fr .95fr; gap: 36px; align-items: start; }
+.facts { margin: 0; display: grid; gap: 18px; }
+.facts dt { font-weight: 500; }
+.facts dd { margin: 4px 0 0; color: var(--ink-2); font-size: 16px; }
+.keep { color: var(--ok); }
+.drop { color: var(--ink-3); }
+
+/* install */
+.install { max-width: 760px; }
+.install .panel { display: grid; }
+.step { display: grid; grid-template-columns: 1fr auto; align-items: stretch; border-top: 1px solid var(--line); }
+.step:first-child { border-top: 0; }
+.step > div { padding: 16px 18px; min-width: 0; }
+.step b { font-weight: 500; font-size: 15px; }
+.step code { display: block; margin-top: 6px; font-size: 13px; line-height: 1.7; color: var(--ink-2); overflow-x: auto; white-space: pre; }
+.step .copy { border-radius: 0; min-width: 84px; }
+.step:last-child .copy { border-radius: 0 0 12px 0; }
+.step:first-child .copy { border-radius: 0 12px 0 0; }
+
+/* limits + faq */
+.limits { margin: 0; padding: 0; list-style: none; display: grid; gap: 14px; max-width: 70ch; }
+.limits li { padding-left: 22px; position: relative; color: var(--ink-2); font-size: 16px; }
+.limits li::before { content: ""; position: absolute; left: 0; top: .7em; width: 10px; height: 1px; background: var(--focus); }
+.limits b { font-weight: 500; color: var(--ink); }
+details { border-top: 1px solid var(--line-soft); padding: 18px 0; max-width: 76ch; }
+details:last-of-type { border-bottom: 1px solid var(--line-soft); }
+summary { cursor: pointer; font-size: 18px; font-weight: 500; list-style: none; display: flex; justify-content: space-between; gap: 20px; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "+"; font: 400 22px/1 var(--mono); color: var(--ink-3); transition: transform .2s ease; }
+details[open] summary::after { transform: rotate(45deg); color: var(--focus); }
+details p { margin: 12px 0 0; color: var(--ink-2); font-size: 16px; }
+details code, .head code, .steps code, .facts code, .limits code, .note code { font-size: .92em; color: var(--ink); background: rgba(255,255,255,.06); padding: 1px 6px; border-radius: 5px; }
+footer { border-top: 1px solid var(--line-soft); padding: 36px 0 56px; color: var(--ink-3); font-size: 15px; }
+footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 32px; }
+
+/* small screens */
+@media (max-width: 920px) {
+  .hero { grid-template-columns: 1fr; padding-top: 48px; }
+  .two, .versus, .pair { grid-template-columns: 1fr; }
+  .steps li { grid-template-columns: 44px minmax(0, 1fr); }
+  .steps li .panel { grid-column: 2; }
+  .graph { grid-template-columns: 1fr; gap: 0; }
+  .link { padding: 14px 0; }
+  .link::after { width: 1px; height: 18px; margin: 8px auto 0; background: var(--ink-3); }
+}
+@media (max-width: 720px) {
+  .nav ul { display: none; }
+  .section { padding: 56px 0; }
+  .wrap { padding: 0 18px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .row { animation: none; transition: none; }
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<nav class="nav" aria-label="Main">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="Foveate, home">
+      <svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="10" fill="none" stroke="#8493b0" stroke-width="2"/><circle cx="16" cy="16" r="4.5" fill="#ffb84d"/></svg>
+      Foveate
+    </a>
+    <ul>
+      <li><a href="#how">How it works</a></li>
+      <li><a href="#related">Related repos</a></li>
+      <li><a href="#mcp">MCP servers</a></li>
+      <li><a href="#install">Install</a></li>
+      <li><a href="#limits">Limits</a></li>
+    </ul>
+    <a class="gh" href="https://github.com/adrienchristiaen/blinders">GitHub</a>
+  </div>
+</nav>
+
+<main id="main">
+<div class="wrap" id="top">
+  <header class="hero">
+    <div>
+      <h1>Start your agents blind.<span>Open only what the prompt needs.</span></h1>
+      <p class="lede">Foveate starts Claude Code, Gemini CLI, Codex or Mistral Vibe in an empty workspace with a short index of your repos. It opens the repos your prompt names, the related ones it needs, and the MCP servers it will use. Everything else stays closed.</p>
+      <ul class="chips" aria-label="Supported CLIs">
+        <li class="chip">Claude Code</li>
+        <li class="chip">Gemini CLI</li>
+        <li class="chip">Codex</li>
+        <li class="chip">Mistral Vibe</li>
+      </ul>
+      <div class="cmd">
+        <code><i>$ </i>git clone https://github.com/adrienchristiaen/blinders
+<i>$ </i>pip install -e blinders</code>
+        <button class="copy" type="button" data-copy="git clone https://github.com/adrienchristiaen/blinders && pip install -e blinders">Copy</button>
+      </div>
+      <p class="note">The command is <code>blind</code> and the repository is still named <code>blinders</code>. Foveate is the name of the project on this page.</p>
+    </div>
+
+    <figure class="fovea" tabindex="0" aria-label="Example of the index an agent starts with. Hover or focus to sharpen every row.">
+      <div class="fovea-bar"><b><span class="dot"></span>index.md</b><span>example session</span></div>
+      <div class="prompt"><i>$ </i>blind run gemini "lineage of sales-api-java"</div>
+      <div class="rows">
+        <div class="row open" style="--i:0"><span class="k">opened</span><span class="n">sales-api-java<small>~/work/sales-api-java</small></span></div>
+        <div class="row rel" style="--i:1;--b:.35px"><span class="k">related</span><span class="n">platform-k8s<small>references sales-api-java</small></span></div>
+        <div class="row rel" style="--i:2;--b:.5px"><span class="k">related</span><span class="n">sales-api<small>name close to sales-api-java</small></span></div>
+        <div class="row" style="--i:3;--b:1.2px;--o:.8"><span class="k">closed</span><span class="n">warehouse-etl</span></div>
+        <div class="row" style="--i:4;--b:1.8px;--o:.7"><span class="k">closed</span><span class="n">billing-ui</span></div>
+        <div class="row" style="--i:5;--b:2.4px;--o:.6"><span class="k">closed</span><span class="n">mobile-app</span></div>
+        <div class="row" style="--i:6;--b:3px;--o:.5"><span class="k">closed</span><span class="n">data-contracts</span></div>
+        <div class="row" style="--i:7;--b:3.6px;--o:.4"><span class="k">closed</span><span class="n">... more, see <code>blind list</code></span></div>
+      </div>
+      <figcaption>Example with made-up repo names. The agent knows the closed repos exist and where they are. It cannot read them.</figcaption>
+    </figure>
+  </header>
+</div>
+
+<section class="section" aria-labelledby="why">
+  <div class="wrap">
+    <div class="head">
+      <h2 id="why">Running an agent at the root of everything<span> loads everything it can find.</span></h2>
+      <p>Agent CLIs read the context files, MCP servers and skills they find when they start. Start one above many repos and you pay for all of it on every prompt, including the repos the question never touches.</p>
+    </div>
+    <div class="versus">
+      <div class="panel">
+        <h3>Started at the root of your repos</h3>
+<pre><s>~/work/</s>
+├─ repo-a/  <s>its CLAUDE.md, GEMINI.md, AGENTS.md</s>
+├─ repo-b/  <s>its CLAUDE.md, GEMINI.md, AGENTS.md</s>
+├─ ...every repo you have
+└─ <s>plus every MCP server and skill you configured</s></pre>
+        <p>Everything is in scope, so everything is a candidate for the context window.</p>
+      </div>
+      <div class="panel after">
+        <h3>Started with Foveate</h3>
+<pre><s>~/.cache/blinders/sessions/</s>
+├─ <b>AGENTS.md  CLAUDE.md  GEMINI.md</b>  <s>one short index</s>
+├─ <em>+ the repos your prompt needs</em>
+└─ <em>+ the MCP servers it will use</em></pre>
+        <p>The agent sees a map of your repos, not their contents. You open more when the question widens.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="how" aria-labelledby="how-h">
+  <div class="wrap">
+    <div class="head">
+      <h2 id="how-h">Index, select, open.<span> No model call in between.</span></h2>
+      <p>Foveate never opens application source to decide what to open. It reads each repo's README start, folder names and build or deploy files once, then ranks the repos in milliseconds.</p>
+    </div>
+    <ol class="steps">
+      <li>
+        <div>
+          <h3>Index your repos</h3>
+          <p>One scan of the folders you point it at. For each repo it keeps the README start, the top-level folder names and markers such as <code>pom.xml</code>, <code>dbt_project.yml</code> or <code>Chart.yaml</code>. It refreshes itself daily.</p>
+        </div>
+        <div class="panel"><pre><b>$ blind init ~/work ~/perso</b>
+indexed &lt;n&gt; repos (&lt;m&gt; links)</pre></div>
+      </li>
+      <li>
+        <div>
+          <h3>Select from the prompt</h3>
+          <p>A repo named in the prompt wins. Otherwise repos are ranked by how well their README and folder names match. If nothing matches, the session stays fully blind.</p>
+        </div>
+        <div class="panel"><pre><b>$ blind select "fix the airflow dag"</b>
+nightly-pipelines  open  (terms: airflow, dag)</pre></div>
+      </li>
+      <li>
+        <div>
+          <h3>Open with the CLI's own options</h3>
+          <p>The agent starts in a throwaway workspace that holds the index. The chosen repos are added with the options each CLI already has. Nothing in your configuration is modified.</p>
+        </div>
+        <div class="panel"><pre><b>$ blind run gemini --dry-run "lineage of sales-api-java"</b>
+cd ~/.cache/blinders/sessions/... &amp;&amp; gemini \
+  --include-directories ~/work/sales-api-java \
+  -i 'lineage of sales-api-java'</pre></div>
+      </li>
+    </ol>
+    <p class="note" style="margin-top:8px">Repo names in these examples are made up. The last block is the real shape of the command.</p>
+  </div>
+</section>
+
+<section class="section" id="related" aria-labelledby="rel-h">
+  <div class="wrap">
+    <div class="head">
+      <h2 id="rel-h">An application is rarely alone.<span> Foveate finds the repos around it.</span></h2>
+      <p>While indexing, it reads build and deploy files only: Helm charts, Kubernetes manifests, Dockerfiles, CI, Terraform, <code>pom.xml</code>, <code>package.json</code>. When one repo mentions another by name, they are linked. You can also declare groups in <code>config.toml</code>.</p>
+    </div>
+
+    <div class="graph" role="img" aria-label="platform-k8s references sales-api-java. sales-api has a name close to sales-api-java.">
+      <div class="node">platform-k8s<small>role: deploy</small></div>
+      <div class="link">references it in helm/values.yaml</div>
+      <div class="node hub">sales-api-java<small>role: app, named in the prompt</small></div>
+      <div class="link">name close</div>
+      <div class="node">sales-api<small>role: app</small></div>
+    </div>
+    <span class="alone">warehouse-etl: no link, stays closed</span>
+
+    <div class="pair" style="margin-top:36px">
+      <div class="panel">
+        <h3>The prompt asks about lineage</h3>
+        <div>
+          <code class="q">"what is the lineage of sales-api-java?"</code>
+          <p><span class="tag o">opened</span>sales-api-java</p>
+          <p><span class="tag">listed</span>platform-k8s, sales-api, with the reason each one is related</p>
+          <p style="margin:0">The deploy repo is not needed to answer, so it costs a line in the index, not a repo in the context.</p>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>The prompt asks about deployment</h3>
+        <div>
+          <code class="q">"how is sales-api-java deployed on kubernetes?"</code>
+          <p><span class="tag o">opened</span>sales-api-java, platform-k8s</p>
+          <p><span class="tag">listed</span>sales-api</p>
+          <p style="margin:0">Words like deploy, helm or kubernetes open the related repo whose role is deploy. Words like lineage or dbt do the same for data repos.</p>
+        </div>
+      </div>
+    </div>
+    <p class="note" style="margin-top:18px">Prefer to open the strongest related repos every time? <code>blind run gemini --related all "..."</code>. Prefer none? <code>--related none</code>.</p>
+  </div>
+</section>
+
+<section class="section" id="mcp" aria-labelledby="mcp-h">
+  <div class="wrap">
+    <div class="two">
+      <div>
+        <div class="head" style="margin-bottom:28px">
+          <h2 id="mcp-h">Only the MCP servers<span> the prompt will use.</span></h2>
+          <p>Every MCP server adds its tool descriptions to the context. Foveate matches your servers to the prompt by name, command, address and description, and starts the CLI with the ones that match. The others are listed in the index so the agent can ask for them.</p>
+        </div>
+        <dl class="facts">
+          <div><dt>Gemini CLI</dt><dd>On by default. Uses <code>--allowed-mcp-server-names</code> and leaves the rest of your settings alone.</dd></div>
+          <div><dt>Claude Code</dt><dd>Only when you pass <code>--mcp</code>. It starts with a file holding just the chosen servers, so plugins and connectors outside that file are not loaded either.</dd></div>
+          <div><dt>Your say</dt><dd>Keep some servers always with <code>[mcp] always</code>, add match words with <code>[mcp.keywords]</code>, or override once with <code>--mcp all</code>, <code>none</code> or a list of names.</dd></div>
+        </dl>
+      </div>
+      <div class="panel">
+        <h3>blind mcp --cli gemini fix the bigquery load</h3>
+<pre><span class="keep">keep</span>  bigquery  <s>(prompt mentions bigquery)</s>
+<span class="drop">drop</span>  github
+<span class="drop">drop</span>  jira
+
+<s># index.md, "MCP servers not loaded":</s>
+github, jira
+<s>Ask the user to restart with --mcp if one is needed.</s></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="graph-h">
+  <div class="wrap">
+    <div class="two">
+      <div class="head" style="margin-bottom:0">
+        <h2 id="graph-h">Optional: a code graph<span> for the repos you open.</span></h2>
+        <p>Foveate does not need a graph. If you use <a href="https://github.com/safishamsi/graphify">Graphify</a>, <code>blind graph --all</code> builds one per repo with <code>graphify extract --code-only --global</code>. That parses code locally with no API key and also merges each repo into Graphify's global graph. When a repo has a graph report, the index tells the agent to read it before searching files.</p>
+      </div>
+      <div class="panel">
+        <h3>Build once, refresh when you want</h3>
+<pre><b>$ uv tool install graphifyy</b>
+<b>$ blind graph sales-api-java</b>
+<b>$ blind graph --all --update</b></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="install" aria-labelledby="inst-h">
+  <div class="wrap">
+    <div class="head">
+      <h2 id="inst-h">Three commands.<span> Python 3.10 or newer.</span></h2>
+    </div>
+    <div class="install">
+      <div class="panel">
+        <div class="step"><div><b>Install</b><code>git clone https://github.com/adrienchristiaen/blinders
+pip install -e blinders</code></div><button class="copy" type="button" data-copy="git clone https://github.com/adrienchristiaen/blinders && pip install -e blinders">Copy</button></div>
+        <div class="step"><div><b>Point it at your repos</b><code>blind init ~/work ~/perso</code></div><button class="copy" type="button" data-copy="blind init ~/work ~/perso">Copy</button></div>
+        <div class="step"><div><b>Launch, and check the command first</b><code>blind run gemini --dry-run "your prompt"</code></div><button class="copy" type="button" data-copy='blind run gemini --dry-run "your prompt"'>Copy</button></div>
+      </div>
+      <p class="note" style="margin-top:14px">Remove <code>--dry-run</code> to start the session. <code>blind audit &lt;folder&gt;</code> estimates what a folder loads at startup, so you can compare before and after.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="limits" aria-labelledby="lim-h">
+  <div class="wrap">
+    <div class="head">
+      <h2 id="lim-h">Before you rely on it</h2>
+    </div>
+    <ul class="limits">
+      <li><b>CLI options were checked for Claude Code and Gemini CLI</b> against their <code>--help</code>. The Codex and Mistral Vibe adapters were not. Run with <code>--dry-run</code> and adjust the adapter in <code>config.toml</code> if your version differs.</li>
+      <li><b>The in-session commands in the index are not verified.</b> The index tells the agent to ask you for <code>/add-dir</code> (Claude Code) or <code>/directory add</code> (Gemini CLI). Check them on your version.</li>
+      <li><b>Blind by construction, not by enforcement.</b> The agent cannot see repos you did not open, but it can still read anything it can reach, such as your home directory.</li>
+      <li><b>Selection is lexical.</b> It looks at repo names, README text, folder names and build files. A prompt that shares no word with a repo will not open it. Name the repo or declare a group.</li>
+      <li><b>Skills are not filtered,</b> and MCP filtering covers user-level servers only.</li>
+      <li><b>Token numbers are estimates.</b> <code>blind audit</code> counts characters divided by four and does not measure MCP tool descriptions.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="faq-h">
+  <div class="wrap">
+    <div class="head">
+      <h2 id="faq-h">Questions</h2>
+    </div>
+    <details>
+      <summary>Does it change my Gemini or Claude configuration?</summary>
+      <p>No. It works through launch options. The files it writes live in <code>~/.cache/blinders</code> and are deleted after seven days, or now with <code>blind clean</code>. With <code>--mcp</code> on Claude Code, a copy of the chosen servers' configuration, which may include tokens, is written there with owner-only permissions.</p>
+    </details>
+    <details>
+      <summary>Does anything leave my machine?</summary>
+      <p>Foveate makes no network calls and has no telemetry. Graphify is a separate tool you run yourself; with <code>--code-only</code> it parses code locally.</p>
+    </details>
+    <details>
+      <summary>Why not just start the agent inside one repo?</summary>
+      <p>You can: <code>blind run claude --primary -r my-repo</code> does exactly that and keeps the repo's own project settings. The default workspace adds what a single repo cannot give you: a map of the other repos, related repos, and a trimmed MCP list.</p>
+    </details>
+    <details>
+      <summary>What happens when the agent needs a repo that is closed?</summary>
+      <p>The index lists every closed repo with its path and tells the agent to ask you to add it. You add it in the session, or restart with <code>blind run &lt;cli&gt; -r &lt;repo&gt;</code>.</p>
+    </details>
+    <details>
+      <summary>Why "Foveate"?</summary>
+      <p>The fovea is the part of the retina that sees sharply. To foveate is to look straight at something. The project is still called blinders in the repository and the command is <code>blind</code>.</p>
+    </details>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Foveate, the working name of <a href="https://github.com/adrienchristiaen/blinders">adrienchristiaen/blinders</a>.</span>
+    <span>Claims on this page come from the repository's README and tests.</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  function copy(text) {
+    if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+    return new Promise(function (resolve, reject) {
+      var ta = document.createElement("textarea");
+      ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy") ? resolve() : reject(); } catch (e) { reject(e); }
+      document.body.removeChild(ta);
+    });
+  }
+  document.querySelectorAll("[data-copy]").forEach(function (btn) {
+    var label = btn.textContent;
+    btn.addEventListener("click", function () {
+      copy(btn.getAttribute("data-copy")).then(function () { btn.textContent = "Copied"; })
+        .catch(function () { btn.textContent = "Select it"; })
+        .then(function () { setTimeout(function () { btn.textContent = label; }, 1600); });
+    });
+  });
+})();
+</script>
+</body>
+</html>
