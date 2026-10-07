@@ -27,9 +27,10 @@ class Sandbox(unittest.TestCase):
         self.work.mkdir()
         self.home = self.tmp / "home"
         self.home.mkdir()
-        self._old = {k: os.environ.get(k) for k in ("BLINDERS_CONFIG_DIR", "BLINDERS_CACHE_DIR")}
+        self._old = {k: os.environ.get(k) for k in ("BLINDERS_CONFIG_DIR", "BLINDERS_CACHE_DIR", "HOME", "PATH")}
         os.environ["BLINDERS_CONFIG_DIR"] = str(self.tmp / "config")
         os.environ["BLINDERS_CACHE_DIR"] = str(self.tmp / "cache")
+        os.environ["HOME"] = str(self.home)
         self.cfg = Config(roots=[str(self.work)])
 
     def tearDown(self) -> None:
@@ -39,6 +40,21 @@ class Sandbox(unittest.TestCase):
             else:
                 os.environ[k] = v
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def sales_repos(self) -> None:
+        """An app, a deploy repo that references it, a same-prefix repo, and an unrelated data repo."""
+        app = make_repo(self.work, "sales-api-java", "Spring Boot sales API.", dirs=("src",))
+        (app / "pom.xml").write_text(
+            "<project><parent><artifactId>spring-boot-starter-parent</artifactId></parent>"
+            "<artifactId>sales-api-java</artifactId></project>")
+        make_repo(self.work, "sales-api", "Python gateway in front of the sales API.", files=("pyproject.toml",))
+        k8s = make_repo(self.work, "platform-k8s", "Kubernetes manifests for all services.", dirs=("helm",))
+        chart = k8s / "helm" / "sales-api-java"
+        chart.mkdir()
+        (chart / "Chart.yaml").write_text("name: sales-api-java\nversion: 1.0.0\n")
+        (chart / "values.yaml").write_text("image: registry.example.com/team/sales-api-java:1.4\nname: sales-api-java-prod\n")
+        etl = make_repo(self.work, "warehouse-etl", "dbt models and airflow dags for the warehouse.", dirs=("dags", "models"))
+        (etl / "dbt_project.yml").write_text("name: warehouse\n")
 
     def standard_repos(self) -> None:
         make_repo(self.work, "carrefour-pipelines",

@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .config import Config, cache_dir
+from .relations import collect_ref_text, compute_links, identities
 from .text import tokens
 
 SKIP_DIRS = {
@@ -26,8 +27,14 @@ MARKERS = {
     "build.sbt": "scala", "package.json": "node", "pyproject.toml": "python",
     "requirements.txt": "python", "go.mod": "go", "Cargo.toml": "rust",
     "Dockerfile": "docker", "dbt_project.yml": "dbt", "Chart.yaml": "helm",
-    "airflow.cfg": "airflow",
+    "airflow.cfg": "airflow", "kustomization.yaml": "kustomize", "skaffold.yaml": "kubernetes",
 }
+APP_MARKERS = {"java/maven", "gradle", "scala", "node", "python", "go", "rust"}
+DEPLOY_MARKERS = {"helm", "kustomize", "kubernetes", "terraform"}
+DEPLOY_TOP_DIRS = {"k8s", "kubernetes", "helm", "charts", "chart", "deploy", "deployment", "manifests", "terraform", "infra", "argocd"}
+DATA_MARKERS = {"dbt", "airflow"}
+DATA_TOP_DIRS = {"dags", "models", "sql", "pipelines"}
+GRAPH_REPORT = Path("graphify-out") / "GRAPH_REPORT.md"
 CONTEXT_FILES = ("AGENTS.md", "CLAUDE.md", "GEMINI.md")
 README_BYTES = 4096
 MAP_BYTES = 4096
@@ -42,6 +49,10 @@ class Repo:
     markers: list[str] = field(default_factory=list)
     top_dirs: list[str] = field(default_factory=list)
     terms: dict[str, int] = field(default_factory=dict)
+    roles: list[str] = field(default_factory=list)       # app | deploy | data
+    identities: list[str] = field(default_factory=list)  # names other repos may use for this one
+    links: list[dict] = field(default_factory=list)      # {"to": path, "w": weight, "kind": ...}
+    graph_report: str = ""                               # path to graphify-out/GRAPH_REPORT.md if present
 
 
 def _read_head(path: Path, limit: int) -> str:
@@ -72,7 +83,17 @@ def describe_repo(path: Path, map_globs: list[str]) -> Repo:
     except OSError:
         entries = []
     top_dirs = [e for e in entries if (path / e).is_dir() and not e.startswith(".") and e not in SKIP_DIRS]
-    markers = sorted({MARKERS[e] for e in entries if e in MARKERS})
+    marker_set = {MARKERS[e] for e in entries if e in MARKERS}
+    if any(e.endswith(".tf") for e in entries):
+        marker_set.add("terraform")
+    markers = sorted(marker_set)
+    roles = []
+    if marker_set & APP_MARKERS and not (marker_set & DEPLOY_MARKERS and not top_dirs):
+        roles.append("app")
+    if marker_set & DEPLOY_MARKERS or set(top_dirs) & DEPLOY_TOP_DIRS:
+        roles.append("deploy")
+    if marker_set & DATA_MARKERS or set(top_dirs) & DATA_TOP_DIRS:
+        roles.append("data")
 
     chunks = [path.name] * 3 + [readme] + top_dirs
     for name in CONTEXT_FILES:
@@ -94,6 +115,9 @@ def describe_repo(path: Path, map_globs: list[str]) -> Repo:
         markers=markers,
         top_dirs=top_dirs[:12],
         terms=terms,
+        roles=roles,
+        identities=sorted(identities(path)),
+        graph_report=str(path / GRAPH_REPORT) if (path / GRAPH_REPORT).is_file() else "",
     )
 
 
@@ -133,7 +157,10 @@ def index_path() -> Path:
 
 
 def build_index(cfg: Config) -> list[Repo]:
-    repos = [describe_repo(p, cfg.map_globs) for p in find_repos(cfg.root_paths, cfg.scan_depth)]
+    paths = find_repos(cfg.root_paths, cfg.scan_depth)
+    repos = [describe_repo(p, cfg.map_globs) for p in paths]
+    texts = {str(p): collect_ref_text(p) for p in paths}
+    compute_links(repos, texts)
     save_index(repos)
     return repos
 
@@ -155,7 +182,8 @@ def load_index(cfg: Config, refresh: bool = False) -> list[Repo]:
             payload = json.loads(path.read_text(encoding="utf-8"))
             age_h = (time.time() - payload.get("built_at", 0)) / 3600
             if age_h <= cfg.index_ttl_hours:
-                return [Repo(**r) for r in payload["repos"]]
+                known = set(Repo.__dataclass_fields__)
+                return [Repo(**{k: v for k, v in r.items() if k in known}) for r in payload["repos"]]
         except (ValueError, KeyError, TypeError):
             pass
     return build_index(cfg)

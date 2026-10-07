@@ -38,6 +38,16 @@ class Config:
     session_ttl_days: int = 7
     map_globs: list[str] = field(default_factory=lambda: list(DEFAULT_MAP_GLOBS))
     adapters: dict[str, dict] = field(default_factory=dict)
+    # related repos
+    max_related_list: int = 5      # related-but-closed repos shown in the index
+    max_related_open: int = 2      # related repos opened automatically (intent match or --related)
+    groups: dict[str, list[str]] = field(default_factory=dict)  # explicit "these repos belong together"
+    # MCP servers
+    mcp_always: list[str] = field(default_factory=list)          # always kept
+    mcp_keywords: dict[str, list[str]] = field(default_factory=dict)  # extra match words per server
+    # graphify
+    graphify_bin: str = "graphify"
+    graph_timeout: int = 900
 
     @property
     def root_paths(self) -> list[Path]:
@@ -60,8 +70,16 @@ def load_config(path: Path | None = None) -> Config:
         "index_max_closed",
         "session_ttl_days",
         "map_globs",
+        "max_related_list",
+        "max_related_open",
+        "groups",
+        "graphify_bin",
+        "graph_timeout",
     ):
         if key in data:
             setattr(cfg, key, data[key])
     cfg.adapters = dict(data.get("adapters", {}))
+    mcp = data.get("mcp", {})
+    cfg.mcp_always = list(mcp.get("always", []))
+    cfg.mcp_keywords = {k: list(v) for k, v in mcp.get("keywords", {}).items()}
     return cfg
