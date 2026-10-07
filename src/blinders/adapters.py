@@ -20,6 +20,12 @@ Gemini's allowlist leaves the rest of its config alone, so it is on by default; 
 ``--strict-mcp-config`` also ignores servers that are not in the file (plugins, connectors),
 so it only applies when you pass ``--mcp``.
 
+``skills_style`` is one of:
+
+- ``claude-settings``: ``skills_flag <file>`` with ``skillOverrides`` hiding the dropped skills from the model
+- ``gemini-workspace``: ``.gemini/settings.json`` written in the blind workspace, disabling the dropped skills
+- ``none``:             this CLI's skills are not touched
+
 Flags checked against ``claude --help`` and ``gemini --help`` (Gemini CLI: ``-i``,
 ``--include-directories``, ``--allowed-mcp-server-names``; Claude Code: ``--add-dir``,
 ``--mcp-config``, ``--strict-mcp-config``).
@@ -45,11 +51,16 @@ class Adapter:
     mcp_style: str = "none"
     mcp_flag: str | None = None
     mcp_auto: bool = False
+    skills_style: str = "none"
+    skills_flag: str | None = None
+    skills_auto: bool = True
 
 
 DEFAULTS: dict[str, Adapter] = {
-    "claude": Adapter("claude", "claude", "--add-dir", "repeat", None, "config", "--mcp-config", False),
-    "gemini": Adapter("gemini", "gemini", "--include-directories", "comma", "-i", "allowlist", "--allowed-mcp-server-names", True),
+    "claude": Adapter("claude", "claude", "--add-dir", "repeat", None, "config", "--mcp-config", False,
+                       "claude-settings", "--settings"),
+    "gemini": Adapter("gemini", "gemini", "--include-directories", "comma", "-i", "allowlist", "--allowed-mcp-server-names", True,
+                       "gemini-workspace"),
     "codex": Adapter("codex", "codex", "--add-dir", "repeat"),
     "vibe": Adapter("vibe", "vibe", None, "link"),
 }
@@ -62,7 +73,8 @@ def get_adapter(name: str, cfg: Config) -> Adapter:
         known = ", ".join(sorted(set(DEFAULTS) | set(cfg.adapters)))
         raise KeyError(f"unknown CLI '{name}' (known: {known})")
     adapter = Adapter(name=name, binary=name) if base is None else Adapter(**vars(base))
-    for key in ("binary", "dir_flag", "dir_style", "prompt_flag", "mcp_style", "mcp_flag", "mcp_auto"):
+    for key in ("binary", "dir_flag", "dir_style", "prompt_flag", "mcp_style", "mcp_flag", "mcp_auto",
+                "skills_style", "skills_flag", "skills_auto"):
         if key in override:
             setattr(adapter, key, override[key])
     if adapter.dir_style not in ("repeat", "comma", "link"):
@@ -73,6 +85,10 @@ def get_adapter(name: str, cfg: Config) -> Adapter:
         raise ValueError(f"adapter '{name}': mcp_style must be allowlist, config or none")
     if adapter.mcp_style != "none" and not adapter.mcp_flag:
         raise ValueError(f"adapter '{name}': mcp_flag is required for mcp_style={adapter.mcp_style}")
+    if adapter.skills_style not in ("claude-settings", "gemini-workspace", "none"):
+        raise ValueError(f"adapter '{name}': skills_style must be claude-settings, gemini-workspace or none")
+    if adapter.skills_style == "claude-settings" and not adapter.skills_flag:
+        raise ValueError(f"adapter '{name}': skills_flag is required for skills_style=claude-settings")
     return adapter
 
 
@@ -83,6 +99,7 @@ def build_command(
     extra: list[str],
     mcp_names: list[str] | None = None,
     mcp_file: str | None = None,
+    settings_file: str | None = None,
 ) -> list[str]:
     """Positional prompt goes first: variadic flags such as ``--add-dir`` would swallow it otherwise.
 
@@ -102,6 +119,8 @@ def build_command(
             cmd += [adapter.mcp_flag, n]
     elif adapter.mcp_style == "config" and mcp_file:
         cmd += ["--strict-mcp-config", adapter.mcp_flag, mcp_file]
+    if adapter.skills_style == "claude-settings" and settings_file:
+        cmd += [adapter.skills_flag, settings_file]
     if prompt and adapter.prompt_flag:
         cmd += [adapter.prompt_flag, prompt]
     cmd += extra

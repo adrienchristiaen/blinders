@@ -10,13 +10,32 @@ Pas de hook, pas de patch du harnais : la CLI est démarrée dans un dossier jet
 
 ```bash
 pip install -e .          # Python >= 3.10 (tomli est installé automatiquement sur 3.10)
-blind init ~/work ~/perso # dossiers qui contiennent tes repos (écrit ~/.config/blinders/config.toml)
+blind                     # le premier lancement pose les questions (voir ci-dessous)
 ```
 
 ## Utilisation
 
+`blind` est l'étape avant la vraie CLI. Elle tourne en local, sans appel de modèle, donc sans token : Gemini ou Claude démarre déjà avec seulement ce qui a été retenu.
+
 ```bash
-blind run gemini "corrige le DAG airflow qui charge BigQuery"   # ouvre seulement les repos pertinents
+blind                       # assistant, puis prompt, plan, Entrée pour lancer
+blind gemini                # idem, avec la CLI choisie
+blind gemini "ton prompt"   # lance directement (--confirm pour voir le plan avant)
+blind setup                 # relance l'assistant (dossiers, index, graphes)
+```
+
+Au premier lancement, `blind` demande les dossiers qui contiennent tes repos, les indexe, puis propose de construire un graphe Graphify pour chacun (local, sans LLM ; il faut `graphify` installé, sinon il l'indique et continue). Ensuite, pour chaque session :
+
+1. tu tapes ton prompt (vide = session entièrement aveugle) ;
+2. il affiche ce qu'il garde et ce qu'il écarte : repos ouverts, repos liés fermés, MCP gardés, skills gardés ;
+3. Entrée lance la CLI ; `+repo` ou `-repo` ajuste les repos ouverts, `q` annule.
+
+Pour ne rien changer à tes habitudes : `alias gemini='blind gemini'`. Le prompt tapé à la ligne de commande lance directement, sans confirmation.
+
+Commandes détaillées :
+
+```bash
+blind run gemini "corrige le DAG airflow qui charge BigQuery"   # comme `blind gemini "..."`, ouvre seulement les repos pertinents
 blind run gemini "comment sales-api-java est déployé sur kubernetes"  # ouvre aussi le repo de déploiement lié
 blind run claude -r loopdex,coolpot                              # repos choisis à la main
 blind run claude                                                 # entièrement aveugle (index seul)
@@ -27,6 +46,7 @@ blind run gemini "..." -- --yolo                                 # options pass�
 blind select "lineage de sales-api-java"    # repos ouverts + repos liés (fermés), avec les scores
 blind list                                  # repos indexés (rôle, chemin)
 blind mcp --cli gemini "mets à jour le jira" # quels MCP seraient gardés
+blind run claude --skills none "..."        # skills visibles : auto | all | none | a,b
 blind graph --all                           # graphes Graphify (optionnel)
 blind audit ~/work ~/work/loopdex           # estime ce que chaque dossier charge au démarrage
 blind clean                                 # supprime les workspaces aveugles
@@ -36,7 +56,7 @@ Pour ouvrir un repo en cours de session : `/add-dir <chemin>` (Claude Code) ou `
 
 ## Fonctionnement
 
-1. **Index** (`blind init`, rafraîchi tous les jours) : trouve les repos git sous tes `roots` et lit le début du README, les noms de dossiers de premier niveau, des marqueurs (`pom.xml`, `dbt_project.yml`, `Chart.yaml`...) et des fichiers de carte optionnels (`graphify-out/*.md`). Il lit aussi, en quantité bornée, les fichiers de build et de déploiement (voir plus bas). Le code applicatif n'est jamais ouvert.
+1. **Index** (`blind setup` ou `blind init`, rafraîchi tous les jours) : trouve les repos git sous tes `roots` et lit le début du README, les noms de dossiers de premier niveau, des marqueurs (`pom.xml`, `dbt_project.yml`, `Chart.yaml`...) et des fichiers de carte optionnels (`graphify-out/*.md`). Il lit aussi, en quantité bornée, les fichiers de build et de déploiement (voir plus bas). Le code applicatif n'est jamais ouvert.
 2. **Sélection** : un repo nommé dans le prompt passe en tête (le nom le plus long gagne : « sales-api-java » n'ouvre pas aussi `sales-api`). Sinon, score de type TF-IDF entre le prompt et chaque repo. Aucun score, aucun repo ouvert : la session reste aveugle. Quelques millisecondes pour des centaines de repos.
 3. **Repos liés** : voir ci-dessous.
 4. **MCP** : voir ci-dessous.
@@ -66,6 +86,18 @@ Les serveurs MCP du niveau utilisateur sont comparés au prompt (nom, commande, 
 
 Sur Claude Code, `--strict-mcp-config` ignore aussi les serveurs absents du fichier (plugins, connecteurs), d'où l'activation explicite. `--mcp all|none|a,b` force un choix.
 
+### Skills selon le prompt
+
+Les skills installés au niveau utilisateur (`~/.claude/skills`, `~/.gemini/skills`, `~/.agents/skills`) sont comparés au prompt : un mot du nom (ou de `[skills.keywords]`) suffit, sinon il faut au moins deux mots de la description en commun, et au plus `max_skills` (5) restent visibles. Les autres sont cachés au modèle pour cette session, jamais supprimés, et l'index les liste.
+
+| CLI | Filtrage | Par défaut |
+|---|---|---|
+| `claude` | `--settings <fichier>` avec `skillOverrides` en `user-invocable-only` : cachés au modèle, mais encore utilisables à la main avec `/nom` | oui |
+| `gemini` | `.gemini/settings.json` écrit dans le workspace aveugle (`skills.disabled`) | oui |
+| `codex`, `vibe` | non géré | n/a |
+
+Les skills fournis par des plugins ou des extensions ne sont pas touchés. `--skills all|none|a,b` force un choix.
+
 ### Graphify (optionnel)
 
 `blind graph <repos...>` ou `blind graph --all` lance `graphify extract <repo> --code-only --global --as <nom>` (analyse locale par AST, sans clé API, avec fusion dans le graphe global de Graphify), puis `graphify update <repo>` avec `--update`. Quand un repo a un `graphify-out/GRAPH_REPORT.md`, l'index le signale à l'agent. Rien n'est obligatoire.
@@ -79,6 +111,8 @@ roots = ["~/work", "~/perso"]
 scan_depth = 3
 max_repos = 3              # repos ouverts automatiquement au maximum
 relative_threshold = 0.4   # garde les repos dont le score >= 40 % du meilleur
+default_cli = "gemini"     # CLI utilisée par un `blind` seul (sinon détection / question)
+max_skills = 5             # skills gardés visibles quand le prompt correspond
 max_related_open = 2       # repos liés ouverts automatiquement
 max_related_list = 5       # repos liés fermés affichés dans l'index
 index_max_closed = 40      # repos fermés listés dans l'index (le reste: `blind list`)
@@ -92,6 +126,11 @@ always = ["github"]        # toujours gardés
 
 [mcp.keywords]             # mots qui rendent un serveur pertinent
 bigquery = ["lineage", "table", "dataset"]
+
+[skills]
+always = ["commit"]        # toujours visibles
+[skills.keywords]
+slides-builder = ["keynote"]
 
 [adapters.vibe]            # adapter une CLI ou en ajouter une
 binary = "vibe"
@@ -114,7 +153,8 @@ dir_style = "link"         # repeat | comma | link
 - Les fichiers de contexte d'un repo ajouté par `--add-dir` ne sont pas forcément chargés par la CLI. Pour garder ses skills, MCP projet et `CLAUDE.md`, utilise `--primary` (démarre dans le premier repo, sans index).
 - La sélection est lexicale, pas sémantique : un prompt sans mot commun avec un repo ne l'ouvrira pas. Nomme le repo, déclare un groupe ou ajoute un fichier de carte (`.blinders/*.md`).
 - Les relations viennent de noms cités dans les fichiers de build et de déploiement ; un nom ambigu (même artefact dans deux repos) est ignoré.
-- Les skills ne sont pas filtrés, et le filtre MCP ne couvre que les serveurs du niveau utilisateur.
+- Les filtres MCP et skills ne couvrent que le niveau utilisateur, pas les plugins ni les extensions.
+- **Filtre de skills non testé en session réelle.** Pour Claude Code, `skillOverrides` vient de la documentation et du suivi d'issues (le réglage est peu documenté, et des issues signalent que `off` n'empêche pas l'appel explicite d'un skill). Pour Gemini, la clé `skills.disabled` et son effet dans les réglages du workspace n'ont pas été vérifiés, et Gemini n'applique les réglages d'un workspace que dans un dossier de confiance. Vérifie avec `blind gemini --dry-run` puis dans la session (`/skills`).
 - `blind audit` estime en caractères / 4, pas avec un vrai tokenizer, et ne mesure pas la taille des schémas d'outils MCP (seulement leur nombre).
 
 ## Site

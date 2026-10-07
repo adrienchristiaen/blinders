@@ -403,16 +403,16 @@ github, jira
 <section class="section" id="install" aria-labelledby="inst-h">
   <div class="wrap">
     <div class="head">
-      <h2 id="inst-h">Three commands.<span> Python 3.10 or newer.</span></h2>
+      <h2 id="inst-h">Install, then type blind.<span> Python 3.10 or newer.</span></h2>
     </div>
     <div class="install">
       <div class="panel">
         <div class="step"><div><b>Install</b><code>git clone https://github.com/adrienchristiaen/blinders
 pip install -e blinders</code></div><button class="copy" type="button" data-copy="git clone https://github.com/adrienchristiaen/blinders && pip install -e blinders">Copy</button></div>
-        <div class="step"><div><b>Point it at your repos</b><code>blind init ~/work ~/perso</code></div><button class="copy" type="button" data-copy="blind init ~/work ~/perso">Copy</button></div>
-        <div class="step"><div><b>Launch, and check the command first</b><code>blind run gemini --dry-run "your prompt"</code></div><button class="copy" type="button" data-copy='blind run gemini --dry-run "your prompt"'>Copy</button></div>
+        <div class="step"><div><b>Start it</b><code>blind</code></div><button class="copy" type="button" data-copy="blind">Copy</button></div>
+        <div class="step"><div><b>Or name the CLI and the prompt</b><code>blind gemini "your prompt"</code></div><button class="copy" type="button" data-copy='blind gemini "your prompt"'>Copy</button></div>
       </div>
-      <p class="note" style="margin-top:14px">Remove <code>--dry-run</code> to start the session. <code>blind audit &lt;folder&gt;</code> estimates what a folder loads at startup, so you can compare before and after.</p>
+      <p class="note" style="margin-top:14px">The first run asks where your repos are, indexes them and offers to build a Graphify code graph for each. Then it asks for your prompt, shows which repos, MCP servers and skills it keeps, and starts the real CLI when you press Enter. Add <code>--dry-run</code> to print the command instead. <code>blind audit &lt;folder&gt;</code> estimates what a folder loads at startup, so you can compare before and after.</p>
     </div>
   </div>
 </section>
@@ -427,7 +427,7 @@ pip install -e blinders</code></div><button class="copy" type="button" data-copy
       <li><b>The in-session commands in the index are not verified.</b> The index tells the agent to ask you for <code>/add-dir</code> (Claude Code) or <code>/directory add</code> (Gemini CLI). Check them on your version.</li>
       <li><b>Blind by construction, not by enforcement.</b> The agent cannot see repos you did not open, but it can still read anything it can reach, such as your home directory.</li>
       <li><b>Selection is lexical.</b> It looks at repo names, README text, folder names and build files. A prompt that shares no word with a repo will not open it. Name the repo or declare a group.</li>
-      <li><b>Skills are not filtered,</b> and MCP filtering covers user-level servers only.</li>
+      <li><b>Skill and MCP filtering covers user-level entries only,</b> not those that come from plugins or extensions. The skill settings used for Claude Code and Gemini CLI come from their docs and issue trackers and have not been tested on a real session. Gemini applies workspace settings only in a folder you trust.</li>
       <li><b>Token numbers are estimates.</b> <code>blind audit</code> counts characters divided by four and does not measure MCP tool descriptions.</li>
     </ul>
   </div>

@@ -45,9 +45,15 @@ class Config:
     # MCP servers
     mcp_always: list[str] = field(default_factory=list)          # always kept
     mcp_keywords: dict[str, list[str]] = field(default_factory=dict)  # extra match words per server
+    # skills
+    skills_always: list[str] = field(default_factory=list)
+    skills_keywords: dict[str, list[str]] = field(default_factory=dict)
+    max_skills: int = 5            # skills kept visible when matching the prompt
     # graphify
     graphify_bin: str = "graphify"
     graph_timeout: int = 900
+    # interactive entry point
+    default_cli: str = ""          # used by a bare `blind`; empty = ask or autodetect
 
     @property
     def root_paths(self) -> list[Path]:
@@ -75,6 +81,8 @@ def load_config(path: Path | None = None) -> Config:
         "groups",
         "graphify_bin",
         "graph_timeout",
+        "max_skills",
+        "default_cli",
     ):
         if key in data:
             setattr(cfg, key, data[key])
@@ -82,4 +90,7 @@ def load_config(path: Path | None = None) -> Config:
     mcp = data.get("mcp", {})
     cfg.mcp_always = list(mcp.get("always", []))
     cfg.mcp_keywords = {k: list(v) for k, v in mcp.get("keywords", {}).items()}
+    skills = data.get("skills", {})
+    cfg.skills_always = list(skills.get("always", []))
+    cfg.skills_keywords = {k: list(v) for k, v in skills.get("keywords", {}).items()}
     return cfg

@@ -38,6 +38,7 @@ def render_index(
     related: list | None = None,
     mcp_dropped: list[str] | None = None,
     cli: str = "<cli>",
+    skills_dropped: list[str] | None = None,
 ) -> str:
     """``related`` holds select.Related items: related repos that stay closed."""
     related = related or []
@@ -76,6 +77,13 @@ def render_index(
             ", ".join(mcp_dropped),
             f"Ask the user to restart with `blind run {cli} --mcp <names>` if one is needed.",
         ]
+    if skills_dropped:
+        lines += [
+            "",
+            "## Skills hidden in this session",
+            ", ".join(skills_dropped),
+            f"The user can still run one by hand with `/<name>`, or restart with `blind run {cli} --skills <names>`.",
+        ]
     lines += [
         "",
         "## Opening a closed repo",
@@ -95,12 +103,16 @@ def create_session(
     mcp_dropped: list[str] | None = None,
     mcp_config: dict | None = None,
     cli: str = "<cli>",
+    skills_dropped: list[str] | None = None,
+    skills_settings: dict | None = None,
+    gemini_settings: dict | None = None,
 ) -> Path:
     root = sessions_dir()
     root.mkdir(parents=True, exist_ok=True)
     # mkdtemp: unique name even for two launches in the same second, created owner-only (0700)
     session = Path(tempfile.mkdtemp(prefix=time.strftime("%Y%m%d-%H%M%S-"), dir=root))
-    text = render_index(opened, closed, cfg, linked=link, related=related, mcp_dropped=mcp_dropped, cli=cli)
+    text = render_index(opened, closed, cfg, linked=link, related=related, mcp_dropped=mcp_dropped, cli=cli,
+                        skills_dropped=skills_dropped)
     for name in CONTEXT_FILENAMES:
         (session / name).write_text(text, encoding="utf-8")
     if mcp_config is not None:
@@ -109,6 +121,11 @@ def create_session(
         fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(mcp_config, fh)
+    if skills_settings is not None:
+        (session / "skills-settings.json").write_text(json.dumps(skills_settings), encoding="utf-8")
+    if gemini_settings is not None:
+        (session / ".gemini").mkdir(exist_ok=True)
+        (session / ".gemini" / "settings.json").write_text(json.dumps(gemini_settings), encoding="utf-8")
     if link:
         for repo in opened:
             target = session / repo.name
