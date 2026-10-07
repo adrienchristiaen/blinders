@@ -72,6 +72,14 @@ class SelectTests(Sandbox):
         self.assertEqual(self.names("update loopdex homepage")[0], "LoopDex")
         self.assertEqual(self.names("bug in jira cli release step")[0], "jira-cli")
 
+    def test_name_contained_in_longer_repo_name_is_not_opened(self):
+        make_repo(self.work, "sales-api", "Python sales API gateway.")
+        make_repo(self.work, "sales-api-java", "Spring Boot sales API.")
+        self.repos = build_index(self.cfg)
+        self.assertEqual(self.names("tu peux me dire le lineage de sales-api-java"), ["sales-api-java"])
+        self.assertEqual(self.names("lineage de sales-api"), ["sales-api"])
+        self.assertEqual(set(self.names("compare sales-api and sales-api-java")), {"sales-api", "sales-api-java"})
+
     def test_no_match_stays_blind(self):
         self.assertEqual(self.names("what is the capital of France"), [])
         self.assertEqual(self.names(""), [])

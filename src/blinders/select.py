@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 
 from .config import Config
 from .scan import Repo
-from .text import squash, tokens
+from .text import squash, tokens, words
 
 NAME_BONUS = 1000.0
 
@@ -19,18 +20,43 @@ class Choice:
     reason: str
 
 
-def _name_mentioned(repo: Repo, prompt_tokens: set[str], prompt_squashed: str) -> bool:
-    name_tokens = tokens(repo.name)
-    if name_tokens and all(t in prompt_tokens for t in name_tokens):
-        return True
-    flat = squash(repo.name)
-    return len(flat) >= 4 and flat in prompt_squashed
+def _name_spans(repo: Repo, prompt_norm: str) -> list[tuple[int, int]]:
+    """Whole-word occurrences of the repo name in the prompt ("jira-cli" matches "jira cli")."""
+    parts = words(repo.name)
+    if len(squash(repo.name)) < 4 or not parts:
+        return []
+    pattern = r"\b" + " ?".join(re.escape(p) for p in parts) + r"\b"
+    return [m.span() for m in re.finditer(pattern, prompt_norm)]
+
+
+def _named_repos(repos: list[Repo], prompt: str) -> set[str]:
+    """Paths of repos explicitly named in the prompt.
+
+    A name that only occurs inside a longer repo name that is also matched does not count:
+    "sales-api-java" must not also open "sales-api".
+    """
+    prompt_norm = " ".join(words(prompt))
+    spans = {r.path: _name_spans(r, prompt_norm) for r in repos}
+    length = {r.path: len(squash(r.name)) for r in repos}
+    named: set[str] = set()
+    for path, own in spans.items():
+        for s in own:
+            covered = any(
+                length[other] > length[path] and o0 <= s[0] and s[1] <= o1
+                for other, other_spans in spans.items()
+                if other != path
+                for o0, o1 in other_spans
+            )
+            if not covered:
+                named.add(path)
+                break
+    return named
 
 
 def rank(prompt: str, repos: list[Repo]) -> list[Choice]:
     q_tokens = tokens(prompt)
     q_set = set(q_tokens)
-    q_squashed = squash(prompt)
+    named = _named_repos(repos, prompt)
     n = max(len(repos), 1)
     df: dict[str, int] = {}
     for repo in repos:
@@ -47,7 +73,7 @@ def rank(prompt: str, repos: list[Repo]) -> list[Choice]:
                 score += math.log(1 + n / df[term]) * math.log(1 + tf)
                 hits.append(term)
         reason = "terms: " + ", ".join(sorted(hits)) if hits else "no match"
-        if _name_mentioned(repo, q_set, q_squashed):
+        if repo.path in named:
             score += NAME_BONUS
             reason = "repo named in prompt"
         ranked.append(Choice(repo, score, reason))

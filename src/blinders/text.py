@@ -43,6 +43,11 @@ def tokens(text: str) -> list[str]:
     return out
 
 
+def words(text: str) -> list[str]:
+    """Lowercased alphanumeric words, accents folded, nothing dropped (for exact name matching)."""
+    return [w for w in re.split(r"[^a-z0-9]+", _fold(text).lower()) if w]
+
+
 def squash(text: str) -> str:
     """Lowercase alphanumerics only, for substring matching of repo names."""
     return re.sub(r"[^a-z0-9]", "", _fold(text).lower())
