@@ -132,7 +132,17 @@ Les skills installés au niveau utilisateur (`~/.claude/skills`, `~/.gemini/skil
 | `gemini` | `.gemini/settings.json` écrit dans le workspace aveugle (`skills.disabled`) | oui |
 | `codex`, `vibe` | non géré | n/a |
 
-Les skills fournis par des plugins ou des extensions ne sont pas touchés. `--skills all|none|a,b` force un choix.
+Les skills sont aussi choisis d'après les repos ouverts : si un mot distinctif du nom d'un skill (`dbt`, `helm`, `terraform`...) apparaît dans le README, l'`AGENTS.md`/`GEMINI.md`/`CLAUDE.md`, le rapport du graphe ou les marqueurs de stack (`dbt_project.yml`, `Chart.yaml`...) d'un repo ouvert, le skill reste visible même si le prompt ne le dit pas. Sans mot de nom, il faut 3 mots de la description. Le motif est affiché (`repo warehouse-etl mentions dbt`). Un mot partagé par la moitié des skills ne compte pas.
+
+Les skills intégrés à une CLI n'ont pas de dossier à lire et ne sont pas touchés. `--skills all|none|a,b` force un choix.
+
+### Fichiers GEMINI.md chargés
+
+Gemini charge `~/.gemini/GEMINI.md`, le `GEMINI.md` de chaque extension, ceux de chaque dossier ajouté (et, au fil des accès, ceux des sous-dossiers qu'il lit), et remonte du dossier de travail vers ses parents jusqu'à un `.git` ou au home. Dans le workspace aveugle, `blind` écrit `context.memoryBoundaryMarkers = []` (réglage documenté de Gemini 0.63 : « an empty array disables parent traversal ») et lance Gemini avec `GEMINI_CLI_TRUST_WORKSPACE=true`, sinon Gemini ignore les réglages d'un workspace non approuvé (`[gemini] trust_workspace = false` pour l'éviter). Ce qui reste chargé et que `blind` ne filtre pas : le `GEMINI.md` global, ceux des extensions (`blind gemini ... -- -e nom1,nom2` ou `-e none` pour n'en garder que certaines), et ceux des repos ouverts, ce qui est voulu. `/memory show` dans la session liste ce qui est vraiment chargé.
+
+### Modèle selon la question
+
+`blind` choisit en local (sans token) un niveau de modèle d'après le prompt : `light` pour une question courte sur au plus un repo, sans verbe de modification ; `strong` quand plusieurs signaux de conception ou de diagnostic s'accumulent (`refactor`, `architecture`, `cause racine`, `bout en bout`... plus plusieurs repos ouverts) ; sinon `standard`, qui ne passe rien et laisse la CLI choisir. Les noms viennent de `[models.<cli>]`, par défaut les alias documentés : Gemini `flash-lite` / `pro`, Claude `haiku` / `opus`. Pas de défaut pour `codex` et `vibe`. Le choix est affiché dans le plan et à l'écran de sélection. `--model default` laisse la CLI faire, `--model light|standard|strong|<nom>` force, un `-m` après `--` l'emporte, `[models] auto = false` désactive.
 
 ### Deux niveaux : repo, puis fichiers
 
@@ -204,6 +214,15 @@ always = ["commit"]        # toujours visibles
 [skills.keywords]
 slides-builder = ["keynote"]
 
+[models]
+auto = true                # false: ne jamais passer de modèle
+[models.gemini]
+light = "flash-lite"       # défauts; mets ici le nom exact que tu veux
+strong = "pro"
+
+[gemini]
+trust_workspace = true     # GEMINI_CLI_TRUST_WORKSPACE=true pour le workspace aveugle
+
 [adapters.vibe]            # adapter une CLI ou en ajouter une
 binary = "vibe"
 dir_style = "link"         # repeat | comma | link
@@ -230,7 +249,8 @@ dir_style = "link"         # repeat | comma | link
 - **Prompts très longs** : un argument de ligne de commande est limité à environ 128 Ko sous Linux. Au-delà de 100 Ko, `blind` écrit le prompt dans `PROMPT.md` du workspace et demande à la CLI de le lire. Un collage multi-ligne dépend du « bracketed paste » du terminal : sans lui, chaque retour à la ligne collé serait vu comme une touche Entrée.
 - **Interface plein écran** : testée avec le pilote de test de Textual 8.2 et sur une capture rendue ici, pas dans ton terminal. Le rendu dépend du terminal (couleurs, souris, SSH).
 - Les filtres MCP et skills ne couvrent que le niveau utilisateur, pas les plugins ni les extensions.
-- **Filtre de skills non testé en session réelle.** Pour Claude Code, `skillOverrides` vient de la documentation et du suivi d'issues (le réglage est peu documenté, et des issues signalent que `off` n'empêche pas l'appel explicite d'un skill). Pour Gemini, la clé `skills.disabled` et son effet dans les réglages du workspace n'ont pas été vérifiés, et Gemini n'applique les réglages d'un workspace que dans un dossier de confiance. Vérifie avec `blind gemini --dry-run` puis dans la session (`/skills`).
+- **Filtre de skills non testé en session réelle.** Pour Claude Code, `skillOverrides` vient de la documentation et du suivi d'issues (le réglage est peu documenté, et des issues signalent que `off` n'empêche pas l'appel explicite d'un skill). Pour Gemini, les clés `skills.disabled` et `context.memoryBoundaryMarkers` existent bien dans le code de la version 0.63 (relu dans le paquet npm), mais leur effet dans une vraie session n'a pas été observé, et Gemini n'applique les réglages d'un workspace que dans un dossier de confiance (d'où `GEMINI_CLI_TRUST_WORKSPACE`, qui approuve le dossier de travail de la session, c'est-à-dire le workspace aveugle).
+- **Choix du modèle** : heuristique sur des mots-clés, pas une mesure. Un `light` mal choisi donne une réponse plus faible, un `strong` coûte plus cher. Les alias `flash-lite`/`pro`/`haiku`/`opus` viennent de la documentation et du code des CLI, pas d'un lancement réel. Corrige avec `[models.<cli>]` ou `--model default`. Vérifie avec `blind gemini --dry-run` puis dans la session (`/skills`).
 - `blind audit` estime en caractères / 4, pas avec un vrai tokenizer, et ne mesure pas la taille des schémas d'outils MCP (seulement leur nombre).
 
 ## Site

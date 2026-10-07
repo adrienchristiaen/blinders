@@ -23,6 +23,7 @@ from .pipeline import STEP_TITLES, Event, run_graphs, run_map, run_sync
 from . import stats as statsmod
 from . import skills as skillmod
 from .mcp import McpPlan, claude_config, discover, missing_names, select_mcp
+from .models import ModelChoice, choose_model
 from .scan import Repo, build_index, load_index
 from .select import Plan, plan, rank
 from .workspace import create_session, prune_sessions
@@ -54,6 +55,8 @@ def _add_launch_args(s: argparse.ArgumentParser) -> None:
                         "all = open the strongest ones anyway, none = ignore relations")
     s.add_argument("--mcp", help="MCP servers to keep: auto (match the prompt), all, none, or names a,b")
     s.add_argument("--skills", help="skills to keep visible: auto (match the prompt), all, none, or names a,b")
+    s.add_argument("--model", help="model: auto (light/strong only when the prompt clearly calls for it), default (leave the CLI alone), "
+                                   "light, standard, strong, or a model name")
     s.add_argument("--primary", action="store_true", help="start inside the first opened repo instead of the blind workspace")
     s.add_argument("--link", action="store_true", help="symlink opened repos into the blind workspace instead of using flags")
     s.add_argument("--dry-run", action="store_true", help="print the command and exit")
@@ -210,6 +213,7 @@ class LaunchPlan:
     mcp_note: str = ""
     skills_plan: skillmod.SkillPlan | None = None
     skills_note: str = ""
+    model: ModelChoice | None = None
     extra: list[str] = field(default_factory=list)
     sync_mode: str = "off"
     use_hints: bool = False
@@ -256,7 +260,9 @@ def make_plan(cfg: Config, adapter: Adapter, prompt: str, repos: list[Repo], opt
         if bad:
             raise LaunchError(f"unknown skill(s): {', '.join(bad)}")
         if installed:
-            lp.skills_plan = skillmod.select_skills(prompt, installed, cfg, sspec)
+            lp.skills_plan = skillmod.select_skills(prompt, installed, cfg, sspec, repos=opened)
+    if adapter.model_flag:
+        lp.model = choose_model(adapter.name, prompt, len(opened), len(related), cfg, getattr(opts, "model", None))
     return lp
 
 
@@ -276,6 +282,8 @@ def describe_plan(lp: LaunchPlan) -> str:
     if lp.skills_plan is not None:
         lines.append(f"  skills kept     {names(s.name for s in lp.skills_plan.kept)}"
                      + (f"   (hidden {len(lp.skills_plan.dropped)})" if lp.skills_plan.dropped else ""))
+    if lp.model is not None and lp.model.tier != "standard":
+        lines.append(f"  model           {lp.model.model} ({lp.model.tier}: {lp.model.reason})")
     for note in (lp.mcp_note, lp.skills_note):
         if note:
             lines.append(f"  note            {note}")
@@ -299,6 +307,10 @@ def materialize(cfg: Config, lp: LaunchPlan, dry_run: bool) -> tuple[str, list[s
             skills_settings = skillmod.claude_settings(lp.skills_plan)
         elif adapter.skills_style == "gemini-workspace":
             gemini_settings = skillmod.gemini_settings(lp.skills_plan)
+    if adapter.skills_style == "gemini-workspace" and not lp.primary:
+        # Gemini looks for GEMINI.md in every parent of the workspace up to a ".git" folder or the home
+        # directory. An empty list of boundary markers turns that upward search off (documented setting).
+        gemini_settings = {**(gemini_settings or {}), "context": {"memoryBoundaryMarkers": []}}
 
     if not dry_run:
         prune_sessions(cfg)
@@ -324,6 +336,7 @@ def materialize(cfg: Config, lp: LaunchPlan, dry_run: bool) -> tuple[str, list[s
         adapter, prompt, dirs, lp.extra, mcp_names=mcp_names,
         mcp_file=str(session / "mcp.json") if mcp_cfg is not None else None,
         settings_file=str(session / "skills-settings.json") if skills_settings is not None else None,
+        model=lp.model.model if lp.model else None,
     )
     return cwd, cmd, session
 
@@ -382,6 +395,8 @@ def launch(cfg: Config, lp: LaunchPlan, dry_run: bool) -> int:
         notes += f"; skills kept: {len(lp.skills_plan.kept)} (hidden {len(lp.skills_plan.dropped)})"
     if lp.hints:
         notes += f"; starting points: {sum(len(h.files) for h in lp.hints.values())} file(s)"
+    if lp.model is not None and lp.model.tier != "standard":
+        notes += f"; model {lp.model.model} ({lp.model.tier})"
     for note in (lp.mcp_note, lp.skills_note):
         if note:
             notes += f"; {note}"
@@ -392,6 +407,10 @@ def launch(cfg: Config, lp: LaunchPlan, dry_run: bool) -> int:
     if shutil.which(cmd[0]) is None:
         return _err(f"'{cmd[0]}' not found in PATH")
     _record(cfg, lp, cwd)
+    if lp.adapter.skills_style == "gemini-workspace" and not lp.primary and cfg.gemini_trust_workspace:
+        # Without trust Gemini ignores the workspace settings above (and the folder is new every launch).
+        # It trusts the folder it starts in: the blind workspace, which blind just wrote.
+        os.environ["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
     os.chdir(cwd)
     os.execvp(cmd[0], cmd)
     return 0  # unreachable
@@ -609,12 +628,17 @@ def ui_plan(cfg: Config, repos: list[Repo], cli: str, prompt: str):
         out.info.append(f"{adapter.name}: no MCP filter available here")
     if adapter.skills_style != "none":
         installed = skillmod.discover(adapter.skills_style.split("-")[0], Path.home(), cfg)
-        splan = skillmod.select_skills(prompt, installed, cfg, "auto")
+        opened_repos = [r for r in repos if r.name in opened]
+        splan = skillmod.select_skills(prompt, installed, cfg, "auto", repos=opened_repos)
         kept = {s.name for s in splan.kept}
         out.skills = [Item(s.name, s.name in kept, splan.reasons.get(s.name, "") or s.source, locked=s.name in cfg.skills_always)
                       for s in installed]
     else:
         out.info.append(f"{adapter.name}: no skills filter available here")
+    if adapter.model_flag and prompt:
+        choice = choose_model(adapter.name, prompt, len(opened), len(related), cfg)
+        if choice is not None and choice.tier != "standard":
+            out.info.append(f"model: {choice.model} ({choice.tier}: {choice.reason}); --model default keeps the CLI's own")
     return out
 
 

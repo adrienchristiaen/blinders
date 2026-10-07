@@ -29,6 +29,8 @@ EXTENSION_DIRS = {"gemini": ".gemini/extensions"}
 
 NAME_WEIGHT = 3.0
 MIN_DESC_HITS = 2
+REPO_NAME_WEIGHT = 1.5
+REPO_MIN_DESC_HITS = 3
 
 
 @dataclass
@@ -95,8 +97,21 @@ def discover(family: str, home: Path, cfg: Config) -> list[Skill]:
     return sorted(skills.values(), key=lambda s: s.name)
 
 
-def select_skills(prompt: str, skills: list[Skill], cfg: Config, spec: str = "auto") -> SkillPlan:
-    """``spec``: ``auto`` (match the prompt), ``all``, ``none``, or comma-separated skill names."""
+def repo_vocabulary(repos) -> dict[str, str]:
+    """Word -> name of the first repo using it: README / AGENTS.md / GEMINI.md / graph report words
+    (already indexed per repo) plus its stack markers (dbt, helm, terraform...)."""
+    vocab: dict[str, str] = {}
+    for repo in repos or ():
+        for t in list(repo.terms) + [m for mk in repo.markers for m in tokens(mk)]:
+            vocab.setdefault(t, repo.name)
+    return vocab
+
+
+def select_skills(prompt: str, skills: list[Skill], cfg: Config, spec: str = "auto", repos=None) -> SkillPlan:
+    """``spec``: ``auto`` (match the prompt), ``all``, ``none``, or comma-separated skill names.
+
+    ``repos`` are the opened repos: a skill whose distinctive name word (``dbt``, ``terraform``...) or
+    several description words appear in what those repos say about themselves is kept as well."""
     if spec == "all":
         return SkillPlan(list(skills), [], {s.name: "all requested" for s in skills})
     always = set(cfg.skills_always)
@@ -109,6 +124,7 @@ def select_skills(prompt: str, skills: list[Skill], cfg: Config, spec: str = "au
         return SkillPlan(kept, [s for s in skills if s not in kept], {s.name: "requested" for s in kept})
 
     q = set(tokens(prompt))
+    vocab = repo_vocabulary(repos)
     df: dict[str, int] = {}
     for s in skills:
         for t in s.terms | s.name_terms:
@@ -130,11 +146,23 @@ def select_skills(prompt: str, skills: list[Skill], cfg: Config, spec: str = "au
         desc_hits = (q & s.terms) - name_hits
         # A word shared by half the skills ("tool", "builder") says little about this one.
         distinctive = {t for t in name_hits if df.get(t, 1) <= max(1, n // 2)}
-        if not distinctive and len(desc_hits) < MIN_DESC_HITS:
+        by_prompt = bool(distinctive) or len(desc_hits) >= MIN_DESC_HITS
+        # Ambient evidence from the opened repos: a higher bar, since a README mentions many things.
+        r_name = {t for t in s.name_terms if t in vocab and t not in q and df.get(t, 1) <= max(1, n // 2)}
+        r_desc = {t for t in s.terms if t in vocab and t not in q and t not in r_name and df.get(t, 1) <= max(1, n // 3)}
+        by_repo = bool(r_name) or len(r_desc) >= REPO_MIN_DESC_HITS
+        if not by_prompt and not by_repo:
             continue
-        score = sum(NAME_WEIGHT * idf(t) for t in name_hits) + sum(idf(t) for t in desc_hits)
-        hits = sorted(name_hits | desc_hits)
-        scored.append((score, s, "prompt mentions " + ", ".join(hits[:3])))
+        score = 0.0
+        why = []
+        if by_prompt:
+            score += sum(NAME_WEIGHT * idf(t) for t in name_hits) + sum(idf(t) for t in desc_hits)
+            why.append("prompt mentions " + ", ".join(sorted(name_hits | desc_hits)[:3]))
+        if by_repo:
+            score += sum(REPO_NAME_WEIGHT * idf(t) for t in r_name) + sum(0.5 * idf(t) for t in r_desc)
+            first = sorted(r_name | r_desc)[:3]
+            why.append(f"repo {vocab[first[0]]} mentions " + ", ".join(first))
+        scored.append((score, s, "; ".join(why)))
     scored.sort(key=lambda x: (-x[0], x[1].name))
     for _, s, why in scored[: cfg.max_skills]:
         kept.append(s)

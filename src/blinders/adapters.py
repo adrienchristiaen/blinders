@@ -54,14 +54,15 @@ class Adapter:
     skills_style: str = "none"
     skills_flag: str | None = None
     skills_auto: bool = True
+    model_flag: str | None = None   # flag that picks the model (all four CLIs document one except Vibe)
 
 
 DEFAULTS: dict[str, Adapter] = {
     "claude": Adapter("claude", "claude", "--add-dir", "repeat", None, "config", "--mcp-config", False,
-                       "claude-settings", "--settings"),
+                       "claude-settings", "--settings", model_flag="--model"),
     "gemini": Adapter("gemini", "gemini", "--include-directories", "comma", "-i", "allowlist", "--allowed-mcp-server-names", True,
-                       "gemini-workspace"),
-    "codex": Adapter("codex", "codex", "--add-dir", "repeat"),
+                       "gemini-workspace", model_flag="-m"),
+    "codex": Adapter("codex", "codex", "--add-dir", "repeat", model_flag="--model"),
     "vibe": Adapter("vibe", "vibe", None, "link"),
 }
 
@@ -74,7 +75,7 @@ def get_adapter(name: str, cfg: Config) -> Adapter:
         raise KeyError(f"unknown CLI '{name}' (known: {known})")
     adapter = Adapter(name=name, binary=name) if base is None else Adapter(**vars(base))
     for key in ("binary", "dir_flag", "dir_style", "prompt_flag", "mcp_style", "mcp_flag", "mcp_auto",
-                "skills_style", "skills_flag", "skills_auto"):
+                "skills_style", "skills_flag", "skills_auto", "model_flag"):
         if key in override:
             setattr(adapter, key, override[key])
     if adapter.dir_style not in ("repeat", "comma", "link"):
@@ -100,6 +101,7 @@ def build_command(
     mcp_names: list[str] | None = None,
     mcp_file: str | None = None,
     settings_file: str | None = None,
+    model: str | None = None,
 ) -> list[str]:
     """Positional prompt goes first: variadic flags such as ``--add-dir`` would swallow it otherwise.
 
@@ -121,6 +123,8 @@ def build_command(
         cmd += ["--strict-mcp-config", adapter.mcp_flag, mcp_file]
     if adapter.skills_style == "claude-settings" and settings_file:
         cmd += [adapter.skills_flag, settings_file]
+    if model and adapter.model_flag and not any(a in (adapter.model_flag, "-m", "--model") or a.startswith("--model=") for a in extra):
+        cmd += [adapter.model_flag, model]   # an explicit -m/--model after `--` always wins
     if prompt and adapter.prompt_flag:
         cmd += [adapter.prompt_flag, prompt]
     cmd += extra
