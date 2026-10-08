@@ -149,7 +149,7 @@ class GraphTests(Sandbox):
         script = (
             "#!/bin/sh\n"
             f'echo "$@" >> {self.calls}\n'
-            '[ "$1" = "extract" ] && [ "$2" = "FAIL" ] && exit 3\n'
+            'case "$1:$2" in extract:*/FAIL) exit 3;; esac\n'
             'target="$2"; [ "$1" = "update" ] && target="$2"\n'
             'mkdir -p "$target/graphify-out" && echo "# report" > "$target/graphify-out/GRAPH_REPORT.md"\n'
         )
@@ -195,7 +195,7 @@ class GraphTests(Sandbox):
     def test_failure_is_reported(self):
         self.cfg.graphify_bin = str(self.bin / "graphify")
         bad = self.by["warehouse-etl"]
-        bad.path = "FAIL"
+        bad.path = str(self.tmp / "FAIL")
         results = build_graphs([bad], self.cfg, log=lambda *_: None)
         self.assertEqual(results[0].status, "failed")
 

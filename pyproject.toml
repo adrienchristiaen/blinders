@@ -7,8 +7,20 @@ name = "blinders"
 version = "0.10.1"
 description = "Launch agent CLIs (Claude Code, Gemini CLI, Codex, Mistral Vibe) blind by default, then open only the repos a prompt needs."
 readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Adrien Christiaen" }]
+keywords = ["claude-code", "gemini-cli", "coding-agents", "context", "tokens"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Environment :: Console",
+]
 requires-python = ">=3.10"
 dependencies = ['tomli>=2.0; python_version < "3.11"']
+
+[project.urls]
+Homepage = "https://github.com/adrienchristiaen/blinders"
+Issues = "https://github.com/adrienchristiaen/blinders/issues"
 
 [project.optional-dependencies]
 ui = ["textual>=8.2,<9"]

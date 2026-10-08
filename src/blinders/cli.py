@@ -82,10 +82,28 @@ def _add_run_args(s: argparse.ArgumentParser) -> None:
     _add_launch_args(s)
 
 
+ADVANCED_COMMANDS = ("init", "run", "mcp", "graph", "audit", "sync", "stats", "model", "models", "clean")
+HELP_EPILOG = """\
+usage:
+  blind                      pick what to open, then start your agent (full-screen, or text mode)
+  blind gemini "question"    start Gemini CLI with only the repos this question needs
+  blind claude "question"    same for Claude Code (also: codex, vibe)
+
+see what it would do, without starting anything:
+  blind select "question"    which repos would open, and why
+
+more commands (each has -h):
+  """ + "  ".join(ADVANCED_COMMANDS) + """
+"""
+
+
 def _parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="blind", description="Start agent CLIs blind; open only the repos you need.")
+    p = argparse.ArgumentParser(
+        prog="blind", formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Start your coding agent blind: it sees a short index of your repos and opens only the ones your prompt needs.",
+        epilog=HELP_EPILOG)
     p.add_argument("--version", action="version", version=_version_text())
-    sub = p.add_subparsers(dest="cmd", required=True)
+    sub = p.add_subparsers(dest="cmd", required=True, title="everyday commands", metavar="<command>")
 
     sub.add_parser("setup", help="first-run wizard: pick your repo directories, index them, build code graphs")
 
@@ -138,6 +156,8 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("doctor", help="show which Python, UI, Graphify, git and CLIs blind can see")
 
     sub.add_parser("clean", help="remove all blind workspaces")
+    # Keep `blind --help` short: advanced commands still work, and each has its own -h.
+    sub._choices_actions = [a for a in sub._choices_actions if a.dest not in ADVANCED_COMMANDS]
     return p
 
 
