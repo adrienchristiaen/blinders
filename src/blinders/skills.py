@@ -101,11 +101,11 @@ def discover(family: str, home: Path, cfg: Config) -> list[Skill]:
 
 
 def repo_vocabulary(repos) -> dict[str, str]:
-    """Word -> name of the first repo using it: README / AGENTS.md / GEMINI.md / graph report words
-    (already indexed per repo) plus its stack markers (dbt, helm, terraform...)."""
+    """Word -> name of the first repo using it: README / AGENTS.md / GEMINI.md / graph report words,
+    plus file, folder and declared names (all already indexed per repo)."""
     vocab: dict[str, str] = {}
     for repo in repos or ():
-        for t in list(repo.terms) + [m for mk in repo.markers for m in tokens(mk)]:
+        for t in repo.terms:
             vocab.setdefault(t, repo.name)
     return vocab
 

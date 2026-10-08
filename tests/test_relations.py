@@ -3,7 +3,7 @@ import unittest
 
 from blinders.relations import identities, normalize
 from blinders.scan import build_index, load_index
-from blinders.select import intents, plan, select
+from blinders.select import plan, select
 from blinders.workspace import render_index
 
 from helpers import Sandbox, make_repo
@@ -43,16 +43,11 @@ class RelationTests(Sandbox):
     def test_unrelated_repo_has_no_links(self):
         self.assertEqual(self.repos["warehouse-etl"].links, [])
 
-    def test_roles(self):
-        self.assertIn("deploy", self.repos["platform-k8s"].roles)
-        self.assertIn("data", self.repos["warehouse-etl"].roles)
-        self.assertIn("app", self.repos["sales-api-java"].roles)
-
     def test_old_index_without_new_fields_still_loads(self):
         from blinders.scan import index_path
         raw = json.loads(index_path().read_text())
         for r in raw["repos"]:
-            for k in ("roles", "identities", "links", "graph_report"):
+            for k in ("identities", "links", "graph_report"):
                 r.pop(k)
             r["future_field"] = 1
         index_path().write_text(json.dumps(raw))
@@ -77,17 +72,12 @@ class PlanTests(Sandbox):
     def names(self, p):
         return [c.repo.name for c in p.opened], [r.repo.name for r in p.related]
 
-    def test_intents(self):
-        self.assertEqual(intents("comment est déployé sur kubernetes"), {"deploy"})
-        self.assertEqual(intents("lineage of the bigquery tables"), {"data"})
-        self.assertEqual(intents("fix the typo"), set())
-
     def test_lineage_question_opens_app_and_lists_neighbors(self):
         opened, related = self.names(plan("tu peux me dire le lineage de sales-api-java", self.repos, self.cfg))
         self.assertEqual(opened, ["sales-api-java"])
         self.assertEqual(set(related), {"platform-k8s", "sales-api"})
 
-    def test_deploy_question_opens_the_deploy_repo(self):
+    def test_a_neighbor_opens_when_the_rest_of_the_prompt_matches_what_it_contains(self):
         opened, related = self.names(plan("comment sales-api-java est déployé sur kubernetes", self.repos, self.cfg))
         self.assertEqual(opened, ["sales-api-java", "platform-k8s"])
         self.assertEqual(related, ["sales-api"])
@@ -113,8 +103,8 @@ class PlanTests(Sandbox):
         self.assertIn("warehouse-etl", related)
         reason = next(r.why for r in p.related if r.repo.name == "warehouse-etl")
         self.assertIn("billing", reason)
-        # data intent ("lineage"): the data repo of the group is opened
-        opened, _ = self.names(plan("lineage de sales-api-java", self.repos, self.cfg))
+        # the rest of the prompt talks about what that repo contains (dbt models): it is opened
+        opened, _ = self.names(plan("dbt models of sales-api-java", self.repos, self.cfg))
         self.assertIn("warehouse-etl", opened)
 
     def test_forced_seeds(self):

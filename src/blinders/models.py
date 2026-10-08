@@ -1,9 +1,8 @@
-"""Pick a model tier for a launch from the prompt and the repos, locally (no tokens spent).
+"""Which model to start a CLI with, and which models that CLI really offers.
 
-Three tiers: ``light`` (questions, lookups), ``standard`` (the CLI's own default, so no flag is
-passed) and ``strong`` (design, debugging across repos, big refactors). Only ``light`` and
-``strong`` change anything. Model names come from config (``[models.<cli>]``); the defaults are
-the aliases each CLI documents (Gemini ``flash-lite`` / ``pro``, Claude ``haiku`` / ``opus``).
+blind never guesses a model from the words of a prompt: that needs word lists that only fit one
+language and one way of working. The model is what you set: ``--model <name>``, the launcher's selector, or
+``[models.<cli>] default = "<name>"`` in the config. Without any of them the CLI keeps its own choice.
 """
 
 from __future__ import annotations
@@ -12,120 +11,21 @@ import json
 import os
 import re
 import shutil
-from dataclasses import dataclass
 from pathlib import Path
 
 from .config import Config, cache_dir
-from .text import words
-
-# Only "strong" has a default: the aliases resolve to the best model your account can use. There is no
-# default "light" model: in a real comparison flash-lite answered less thoroughly and used more requests.
-# Set one yourself in [models.<cli>] light = "..." if it suits you (see `blind models`).
-DEFAULT_MODELS: dict[str, dict[str, str]] = {
-    "gemini": {"strong": "pro"},
-    "claude": {"strong": "opus"},
-}
-TIERS = ("light", "standard", "strong")
-
-# Whole words (accents folded, lowercase). French and English.
-STRONG_WORDS = {
-    "architecture", "refactor", "refactoring", "refactorer", "migrate", "migration", "migrer", "redesign",
-    "design", "concevoir", "conception", "debug", "debugger", "deboguer", "investigate", "investiguer",
-    "diagnostic", "diagnose", "audit", "securite", "security", "concurrency", "concurrence", "performance",
-    "optimiser", "optimize", "lineage", "transverse",
-}
-STRONG_PHRASES = ("root cause", "cause racine", "bout en bout", "end to end", "race condition", "trade off")
-EDIT_WORDS = {
-    "implement", "implemente", "implementer", "add", "ajoute", "ajouter", "fix", "corrige", "corriger",
-    "write", "ecris", "ecrire", "create", "cree", "creer", "modifie", "modifier", "supprime", "supprimer",
-    "delete", "remove", "change", "update", "deploy", "deploie", "renomme", "rename", "genere", "generate",
-    "build", "construis", "commit", "push",
-}
-# Strong words that ask for work rather than an answer: never "light", even phrased as a question.
-STRONG_ACTIONS = {
-    "refactor", "refactoring", "refactorer", "migrate", "migrer", "redesign", "debug", "debugger",
-    "deboguer", "optimiser", "optimize", "concevoir",
-}
-QUESTION_STARTS = {
-    "comment", "pourquoi", "quoi", "est", "what", "where", "how", "why", "which", "who", "does", "is", "are",
-    "peux", "pouvez", "can", "could", "pourrais", "ou", "quel", "quelle", "quels", "quelles", "combien", "qui",
-}
-LIGHT_WORDS = {
-    "explique", "expliquer", "explain", "where", "ou", "quel", "quelle", "quels", "quelles", "what", "list",
-    "liste", "lister", "montre", "show", "find", "trouve", "trouver", "resume", "resumer", "summarize",
-    "combien", "lis", "read", "which", "who", "qui", "dis", "tell", "dire", "savoir", "indique", "montrer",
-}
-LONG_PROMPT = 1200
-SHORT_PROMPT = 400
 
 
-@dataclass
-class ModelChoice:
-    tier: str            # light | standard | strong
-    reason: str
-    model: str | None    # name passed to the CLI; None leaves the CLI's default alone
+def resolve_model(cli: str, spec: str | None, cfg: Config) -> str | None:
+    """Name to pass to the CLI, or ``None`` to leave the CLI alone.
 
-
-def models_for(cli: str, cfg: Config) -> dict[str, str]:
-    merged = dict(DEFAULT_MODELS.get(cli, {}))
-    merged.update({t: m for t, m in cfg.models.get(cli, {}).items() if m})
-    return merged
-
-
-def classify(prompt: str, opened: int, related: int = 0) -> tuple[str, str]:
-    """(tier, reason). Conservative: ``standard`` unless the signals are clear."""
-    text = " ".join(words(prompt))
-    toks = set(text.split())
-    strong = sorted(toks & STRONG_WORDS) + [p for p in STRONG_PHRASES if p in text]
-    edits = toks & (EDIT_WORDS | STRONG_ACTIONS)
-    asks = toks & LIGHT_WORDS
-    first = text.split()[0] if text else ""
-    question = "?" in prompt or first in QUESTION_STARTS or bool(asks)
-    score = 2 * len(strong)
-    if opened >= 3:
-        score += 1
-    if opened + related >= 4:
-        score += 1
-    if len(prompt) > LONG_PROMPT:
-        score += 1
-    if score >= 3:
-        why = ", ".join(strong[:3]) or "large request"
-        return "strong", f"{why}; {opened} repo(s) opened"
-    if question and not edits and len(prompt) <= SHORT_PROMPT and opened <= 2 and related <= 2:
-        return "light", f"short question, {opened} repo(s)"
-    blockers = []
-    if edits:
-        blockers.append(f"asks for work ({sorted(edits)[0]})")
-    if not question:
-        blockers.append("not phrased as a question")
-    if len(prompt) > SHORT_PROMPT:
-        blockers.append("long prompt")
-    if opened > 2 or related > 2:
-        blockers.append(f"{opened} repo(s) opened, {related} related")
-    return "standard", "; ".join(blockers) or "default"
-
-
-def choose_model(cli: str, prompt: str, opened: int, related: int, cfg: Config, spec: str | None = None) -> ModelChoice | None:
-    """``spec``: ``auto`` (default), ``default`` (leave the CLI alone), a tier, or an explicit model name.
-    ``None`` when nothing should be passed to the CLI."""
-    spec = (spec or "auto").strip()
-    if spec == "default" or (spec == "auto" and not cfg.models_auto):
+    ``spec`` is the ``--model`` value: a model name, ``default`` (hands off), or nothing (use the config)."""
+    spec = (spec or "").strip()
+    if spec == "default":
         return None
-    table = models_for(cli, cfg)
-    if spec in TIERS:
-        tier, why = spec, "requested"
-    elif spec == "auto":
-        if not prompt.strip():
-            return None
-        tier, why = classify(prompt, opened, related)
-    else:
-        return ModelChoice("custom", "requested", spec)
-    if tier == "standard":
-        return ModelChoice("standard", why, table.get("standard"))
-    model = table.get(tier)
-    if not model:   # nothing configured for this tier: say so, pass nothing
-        return ModelChoice(tier, f"{why}; no {tier} model set in [models.{cli}]", None)
-    return ModelChoice(tier, why, model)
+    if spec:
+        return spec
+    return cfg.models.get(cli, {}).get("default") or None
 
 
 # --- the models your CLI really offers ---------------------------------------------------------

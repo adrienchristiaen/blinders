@@ -7,15 +7,17 @@ import unicodedata
 
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
+# Grammar words only. Words that are merely common in *your* repos ("service", "readme", "test") are
+# found from the data instead: see ``select.UBIQUITOUS``.
 STOPWORDS = frozenset(
     """
     the and for with that this from into your you are not but all can has have will
-    use used using add new get set run how why what when where which should would could
+    how why what when where which should would could
     les des une pour avec dans sur par pas que qui est sont mais tout tous plus
     fait faire fais peux veux dois cette ces aux ses son sa ou et de du le la un en
-    file files code repo repository project readme todo test tests src main
     """.split()
 )
+STEM_LENGTH = 5
 
 
 def _fold(text: str) -> str:
@@ -51,3 +53,13 @@ def words(text: str) -> list[str]:
 def squash(text: str) -> str:
     """Lowercase alphanumerics only, for substring matching of repo names."""
     return re.sub(r"[^a-z0-9]", "", _fold(text).lower())
+
+
+def stem(token: str) -> str:
+    """Crude, language-free stem: the first letters. ``deploy``, ``deployed``, ``deployment`` and the French
+    ``déploie`` meet; so do ``table`` and ``tables``. Used only to compare words, never shown."""
+    return token[:STEM_LENGTH]
+
+
+def stems(text: str) -> list[str]:
+    return [stem(t) for t in tokens(text)]

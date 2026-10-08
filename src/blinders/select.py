@@ -8,9 +8,13 @@ from dataclasses import dataclass
 
 from .config import Config
 from .scan import Repo
-from .text import squash, tokens, words
+from .text import squash, stem, stems, words
 
 NAME_BONUS = 1000.0
+# A word found in at least this share of the repos (once there are enough of them to tell) describes
+# none of them: it is learned from the user's own repos instead of listed by hand.
+UBIQUITOUS_SHARE = 0.5
+MIN_REPOS_FOR_UBIQUITY = 6
 
 
 @dataclass
@@ -53,22 +57,33 @@ def _named_repos(repos: list[Repo], prompt: str) -> set[str]:
     return named
 
 
-def rank(prompt: str, repos: list[Repo]) -> list[Choice]:
-    q_tokens = tokens(prompt)
-    q_set = set(q_tokens)
+def _stemmed(repo: Repo) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for term, n in repo.terms.items():
+        s = stem(term)
+        out[s] = out.get(s, 0) + n
+    return out
+
+
+def rank(prompt: str, repos: list[Repo], ignore: set[str] | None = None) -> list[Choice]:
+    """Every repo, best first. ``ignore`` holds stems the prompt should not be scored on."""
+    q_set = set(stems(prompt)) - (ignore or set())
     named = _named_repos(repos, prompt)
     n = max(len(repos), 1)
+    vocab = {repo.path: _stemmed(repo) for repo in repos}
     df: dict[str, int] = {}
-    for repo in repos:
-        for term in repo.terms:
+    for terms in vocab.values():
+        for term in terms:
             df[term] = df.get(term, 0) + 1
+    if len(repos) >= MIN_REPOS_FOR_UBIQUITY:
+        q_set = {t for t in q_set if df.get(t, 0) < n * UBIQUITOUS_SHARE}
 
     ranked: list[Choice] = []
     for repo in repos:
         score = 0.0
         hits: list[str] = []
         for term in q_set:
-            tf = repo.terms.get(term, 0)
+            tf = vocab[repo.path].get(term, 0)
             if tf:
                 score += math.log(1 + n / df[term]) * math.log(1 + tf)
                 hits.append(term)
@@ -81,9 +96,9 @@ def rank(prompt: str, repos: list[Repo]) -> list[Choice]:
     return ranked
 
 
-def select(prompt: str, repos: list[Repo], cfg: Config) -> list[Choice]:
+def select(prompt: str, repos: list[Repo], cfg: Config, ranked: list[Choice] | None = None) -> list[Choice]:
     """Return the seed repos (named or best content match), best first. Empty: stay fully blind."""
-    ranked = rank(prompt, repos)
+    ranked = ranked if ranked is not None else rank(prompt, repos)
     if not ranked or ranked[0].score <= 0:
         return []
     top = ranked[0].score
@@ -92,26 +107,6 @@ def select(prompt: str, repos: list[Repo], cfg: Config) -> list[Choice]:
 
 
 # --- related repos ---------------------------------------------------------------------------
-
-# Words in a prompt that say "I also need the repo that plays this role".
-INTENT_WORDS = {
-    "deploy": {
-        "deploy", "deploys", "deployed", "deployment", "deploiement", "deploie", "deployer",
-        "kubernetes", "k8s", "helm", "chart", "kustomize", "terraform", "infra", "infrastructure",
-        "ingress", "pod", "pods", "cluster", "namespace", "rollout", "argocd", "prod", "production",
-        "release", "docker", "container", "conteneur",
-    },
-    "data": {
-        "lineage", "dbt", "airflow", "dag", "dags", "bigquery", "pipeline", "pipelines",
-        "table", "tables", "schema", "kafka", "topic", "topics", "dataset", "etl",
-    },
-}
-
-
-def intents(prompt: str) -> set[str]:
-    words = set(tokens(prompt))
-    return {role for role, vocab in INTENT_WORDS.items() if words & vocab}
-
 
 @dataclass
 class Related:
@@ -173,8 +168,9 @@ def plan(
     """Seeds, then their related repos.
 
     Seeds are ``forced`` repos (``-r``) when given, else the repos the prompt names or matches.
-    ``related``: ``auto`` opens neighbors whose role matches the prompt's intent (deploy, data),
-    ``all`` opens the strongest neighbors regardless, ``none`` ignores relations.
+    ``related``: ``auto`` opens a neighbor when the *rest* of the prompt (what is left once the seeds' own
+    names are set aside) also matches what that neighbor contains, ``all`` opens the strongest neighbors
+    regardless, ``none`` ignores relations. No word list decides this: the neighbor's own files and names do.
     """
     if forced is not None:
         seeds = [Choice(r, NAME_BONUS, "requested") for r in forced]
@@ -182,15 +178,16 @@ def plan(
         seeds = select(prompt, repos, cfg)
     if not seeds or related == "none":
         return Plan(seeds, [])
-    wanted = intents(prompt)
+    seed_names = {s for seed in seeds for s in stems(seed.repo.name)}
+    affinity = {c.repo.path: c.score for c in rank(prompt, repos, ignore=seed_names)}
     opened = list(seeds)
     listed: list[Related] = []
     budget = cfg.max_related_open
     for repo, weight, why in neighbors([s.repo for s in seeds], repos, cfg):
-        takes = related == "all" or bool(wanted & set(repo.roles))
+        takes = related == "all" or affinity.get(repo.path, 0.0) > 0
         if takes and budget > 0:
             budget -= 1
-            reason = "related: " + why + (" (role matches the prompt)" if related == "auto" else "")
+            reason = "related: " + why + (" (the rest of the prompt matches it)" if related == "auto" else "")
             opened.append(Choice(repo, weight, reason))
         elif len(listed) < cfg.max_related_list:
             listed.append(Related(repo, weight, why, opens=False))

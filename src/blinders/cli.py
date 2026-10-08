@@ -24,7 +24,7 @@ from . import stats as statsmod
 from . import skills as skillmod
 from .mcp import McpPlan, claude_config, discover, missing_names, select_mcp
 from . import models as modelsmod
-from .models import ModelChoice, choose_model
+from .models import resolve_model
 from . import geminihome
 from .scan import Repo, build_index, load_index
 from .select import Plan, plan, rank
@@ -53,12 +53,12 @@ def _add_launch_args(s: argparse.ArgumentParser) -> None:
     s.add_argument("-r", "--repos", help="comma-separated repo names (or paths); skips automatic selection")
     s.add_argument("--max", type=int, help="max repos to open automatically")
     s.add_argument("--related", choices=("auto", "all", "none"), default="auto",
-                   help="related repos (deploy, data...): auto = open those whose role matches the prompt, "
+                   help="related repos: auto = open those that also match the rest of the prompt, "
                         "all = open the strongest ones anyway, none = ignore relations")
     s.add_argument("--mcp", help="MCP servers to keep: auto (match the prompt), all, none, or names a,b")
     s.add_argument("--skills", help="skills to keep visible: auto (match the prompt), all, none, or names a,b")
-    s.add_argument("--model", help="model: auto (light/strong only when the prompt clearly calls for it), default (leave the CLI alone), "
-                                   "light, standard, strong, or a model name")
+    s.add_argument("--model", help="model name to start the CLI with (`blind models` lists them); `default` leaves the CLI alone. "
+                                   "Without it, [models.<cli>] default from the config applies")
     s.add_argument("--extensions", help="Gemini extensions to keep: auto (those a kept skill, MCP server or the prompt needs), all, none, or names a,b")
     s.add_argument("--no-isolate", action="store_true", help="Gemini: use your real ~/.gemini unfiltered (every extension, GEMINI.md and includeDirectories)")
     s.add_argument("--primary", action="store_true", help="start inside the first opened repo instead of the blind workspace")
@@ -82,7 +82,7 @@ def _add_run_args(s: argparse.ArgumentParser) -> None:
     _add_launch_args(s)
 
 
-ADVANCED_COMMANDS = ("init", "run", "mcp", "graph", "audit", "sync", "stats", "model", "models", "clean")
+ADVANCED_COMMANDS = ("init", "run", "mcp", "graph", "audit", "sync", "stats", "models", "clean")
 HELP_EPILOG = """\
 usage:
   blind                      pick what to open, then start your agent (full-screen, or text mode)
@@ -148,11 +148,7 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("note", nargs="*", metavar="note ID key=value",
                    help="attach numbers by hand, e.g. `blind stats note a1b2c3 first_turn_tokens=21000 input_tokens=90000 output_tokens=4000`")
 
-    m = sub.add_parser("model", help="show which model blind would pick for a prompt, and why")
-    m.add_argument("prompt", nargs="*")
-    m.add_argument("--cli", default="gemini")
-    m.add_argument("-r", "--repos", help="repo names to count as opened (default: what the prompt selects)")
-    sub.add_parser("models", help="list the models your Gemini/Claude CLI offers, the tiers blind uses, and what to set")
+    sub.add_parser("models", help="list the models your Gemini/Claude CLI offers and how to set a default")
     sub.add_parser("doctor", help="show which Python, UI, Graphify, git and CLIs blind can see")
 
     sub.add_parser("clean", help="remove all blind workspaces")
@@ -182,8 +178,7 @@ def cmd_init(args, cfg: Config) -> int:
 
 def cmd_list(args, cfg: Config) -> int:
     for r in load_index(cfg, refresh=args.refresh):
-        roles = ",".join(r.roles) or "-"
-        print(f"{r.name}\t{roles}\t{r.path}\t{r.description[:70]}")
+        print(f"{r.name}\t{r.path}\t{r.description[:70]}")
     return 0
 
 
@@ -242,7 +237,7 @@ class LaunchPlan:
     mcp_note: str = ""
     skills_plan: skillmod.SkillPlan | None = None
     skills_note: str = ""
-    model: ModelChoice | None = None
+    model: str | None = None
     ext_plan: geminihome.ExtPlan | None = None
     rtk: str = ""                               # rtk binary condensing shell output in this session
     isolate: bool = False                       # run Gemini with a per-session home
@@ -303,7 +298,7 @@ def make_plan(cfg: Config, adapter: Adapter, prompt: str, repos: list[Repo], opt
         if cfg.gemini_rtk:
             lp.rtk = shutil.which("rtk") or ""
     if adapter.model_flag:
-        lp.model = choose_model(adapter.name, prompt, len(opened), len(related), cfg, getattr(opts, "model", None))
+        lp.model = resolve_model(adapter.name, getattr(opts, "model", None), cfg)
     return lp
 
 
@@ -328,9 +323,8 @@ def describe_plan(lp: LaunchPlan) -> str:
                      + (f"   (hidden {len(lp.ext_plan.dropped)})" if lp.ext_plan.dropped else ""))
     if lp.isolate and lp.rtk:
         lines.append("  shell output    condensed by rtk")
-    if lp.model is not None:
-        shown = lp.model.model or "CLI default"
-        lines.append(f"  model           {shown} ({lp.model.tier}: {lp.model.reason})")
+    if lp.model:
+        lines.append(f"  model           {lp.model}")
     for note in (lp.mcp_note, lp.skills_note):
         if note:
             lines.append(f"  note            {note}")
@@ -399,7 +393,7 @@ def materialize(cfg: Config, lp: LaunchPlan, dry_run: bool) -> tuple[str, list[s
         adapter, prompt, dirs, lp.extra, mcp_names=mcp_names,
         mcp_file=str(session / "mcp.json") if mcp_cfg is not None else None,
         settings_file=str(session / "skills-settings.json") if skills_settings is not None else None,
-        model=lp.model.model if lp.model else None,
+        model=lp.model,
     )
     return cwd, cmd, session
 
@@ -460,8 +454,8 @@ def launch(cfg: Config, lp: LaunchPlan, dry_run: bool) -> int:
         notes += f"; starting points: {sum(len(h.files) for h in lp.hints.values())} file(s)"
     if lp.ext_plan is not None and lp.ext_plan.dropped:
         notes += f"; extensions kept: {len(lp.ext_plan.kept)} (hidden {len(lp.ext_plan.dropped)})"
-    if lp.model is not None and lp.model.model:
-        notes += f"; model {lp.model.model} ({lp.model.tier})"
+    if lp.model:
+        notes += f"; model {lp.model}"
     for note in (lp.mcp_note, lp.skills_note, lp.home_note):
         if note:
             notes += f"; {note}"
@@ -712,10 +706,6 @@ def ui_plan(cfg: Config, repos: list[Repo], cli: str, prompt: str):
         for label, _path, tok in geminihome.memory_sources(Path.home()):
             if tok >= 500 and label == "global":
                 out.info.append(f"global GEMINI.md is about {tok} tokens (kept; `[gemini] global_memory = false` drops it)")
-    if adapter.model_flag and prompt:
-        choice = choose_model(adapter.name, prompt, len(opened), len(related), cfg)
-        if choice is not None:
-            out.info.append(f"model: {choice.model or 'CLI default'} ({choice.tier}: {choice.reason}); --model default keeps the CLI's own")
     return out
 
 
@@ -789,7 +779,7 @@ def run_launcher(args, cfg: Config, repos: list[Repo], cli: str | None, extra: l
     chosen = set(res.repos)
     forced = [r for r in repos if r.name in chosen]
     args.mcp = args.skills = None
-    if res.model != "auto":
+    if res.model != "default":
         args.model = res.model   # chosen on the launcher screen; otherwise the --model flag (if any) stays
     if adapter.mcp_style != "none":
         names = [s.name for s in discover(adapter.mcp_style, Path.home(), cfg)]
@@ -1016,37 +1006,6 @@ def cmd_stats(args, cfg: Config) -> int:
     return 0
 
 
-def cmd_model(args, cfg: Config) -> int:
-    prompt = " ".join(args.prompt).strip()
-    try:
-        adapter = get_adapter(args.cli, cfg)
-    except (KeyError, ValueError) as exc:
-        return _err(str(exc))
-    if not adapter.model_flag:
-        return _err(f"{adapter.name} has no model flag in blind")
-    repos = load_index(cfg) or []
-    if args.repos:
-        forced, missing = _resolve_forced(args.repos, repos)
-        if missing:
-            return _err(f"unknown repo(s): {', '.join(missing)}")
-        opened, related = len(forced), 0
-    else:
-        seed = plan(prompt, repos, cfg) if prompt and repos else None
-        opened, related = (len(seed.opened), len(seed.related)) if seed else (0, 0)
-    choice = choose_model(adapter.name, prompt, opened, related, cfg)
-    print(f"prompt: {len(prompt)} characters; {opened} repo(s) opened, {related} related")
-    if choice is None:
-        print("model:  none passed (no prompt, [models] auto = false, or no name known for this tier)")
-        return 0
-    print(f"tier:   {choice.tier} ({choice.reason})")
-    print(f"flag:   {adapter.model_flag} {choice.model}" if choice.model else "flag:   none (the CLI picks its own model)")
-    print("force one with `--model light|standard|strong|<name>`, or in the launcher's model selector; `blind models` lists them.")
-    current = modelsmod.settings_model(Path.home())
-    if adapter.name == "gemini" and choice.model is None and (not current or current.startswith("auto")):
-        print("note: Gemini runs its own router (an extra model call per prompt). `blind models` shows how to avoid it.")
-    return 0
-
-
 def cmd_models(args, cfg: Config) -> int:
     home = Path.home()
     default = modelsmod.settings_model(home)
@@ -1054,15 +1013,13 @@ def cmd_models(args, cfg: Config) -> int:
     if not default or default.startswith("auto"):
         print("  Gemini's own router runs for each prompt (a separate small-model call, 14,641 input tokens in one of your sessions).\n"
               "  A concrete model skips it: `blind gemini --model <id>`, the launcher selector, or\n"
-              "  [models.gemini] standard = \"<id>\" for every ordinary request.")
+              "  [models.gemini] default = \"<id>\" for every launch.")
     print("\nmodels you can pick (blind passes -m <id> to Gemini):")
     for model, note in modelsmod.gemini_model_list(home):
         print(f"  {model:<36} {note}")
-    table = modelsmod.models_for("gemini", cfg)
-    print("\ntiers blind uses for `--model auto`:")
-    for tier in ("light", "standard", "strong"):
-        print(f"  {tier:<9} {table.get(tier) or ('the CLI decides' if tier == 'standard' else 'not set')}")
-    print("\nto change them, in ~/.config/blinders/config.toml:\n  [models.gemini]\n  light = \"<id>\"\n  standard = \"<id>\"\n  strong = \"<id>\"")
+    configured = cfg.models.get("gemini", {}).get("default")
+    print(f"\n[models.gemini] default in config.toml: {configured or 'not set (the CLI decides)'}")
+    print("to set one for every launch, in ~/.config/blinders/config.toml:\n  [models.gemini]\n  default = \"<id>\"")
     print("access to a model depends on your Google account: the list shows what this Gemini CLI version knows.")
     return 0
 
@@ -1138,7 +1095,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_start(args, cfg, extra, cli)
     args = _parser().parse_args(argv)
     handlers = {
-        "setup": cmd_setup, "doctor": cmd_doctor, "model": cmd_model, "models": cmd_models, "sync": cmd_sync, "status": cmd_status, "stats": cmd_stats, "init": cmd_init, "list": cmd_list, "select": cmd_select, "mcp": cmd_mcp,
+        "setup": cmd_setup, "doctor": cmd_doctor, "models": cmd_models, "sync": cmd_sync, "status": cmd_status, "stats": cmd_stats, "init": cmd_init, "list": cmd_list, "select": cmd_select, "mcp": cmd_mcp,
         "graph": cmd_graph, "audit": cmd_audit, "clean": cmd_clean,
     }
     return handlers[args.cmd](args, cfg)

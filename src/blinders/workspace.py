@@ -23,11 +23,10 @@ def sessions_dir() -> Path:
     return cache_dir() / "sessions"
 
 
-def _line(repo: Repo, with_markers: bool = True, why: str = "") -> str:
+def _line(repo: Repo, why: str = "") -> str:
     desc = repo.description[:100].rstrip()
-    extra = f" [{', '.join(repo.markers)}]" if with_markers and repo.markers else ""
     tail = f" - {why}" if why else (f" - {desc}" if desc else "")
-    return f"- {repo.name}: {repo.path}{extra}{tail}"
+    return f"- {repo.name}: {repo.path}{tail}"
 
 
 def render_index(
@@ -69,7 +68,7 @@ def render_index(
     rest = [r for r in closed if r.path not in related_paths]
     shown = rest[: cfg.index_max_closed]
     lines += ["## Closed repos (known, not visible)"]
-    lines += [_line(r, with_markers=False) for r in shown] or ["- none"]
+    lines += [_line(r) for r in shown] or ["- none"]
     if len(rest) > len(shown):
         lines.append(f"- ... and {len(rest) - len(shown)} more (run `blind list`)")
     if mcp_dropped:

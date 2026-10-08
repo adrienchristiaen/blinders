@@ -88,20 +88,20 @@ class UiTests(unittest.TestCase):
     def selected(self, app, key):
         return sorted(str(v) for v in app.query_one(f"#{key}", SelectionList).selected)
 
-    def test_model_selector_defaults_to_auto_and_is_returned(self):
+    def test_model_selector_defaults_to_the_cli_default_and_is_returned(self):
         async def go():
             from textual.widgets import Select
             app = self.app("alpha")
             async with app.run_test(size=(130, 40)) as pilot:
                 await self.selecting(pilot)
-                self.assertEqual(app.query_one("#model", Select).value, "auto")
-                app.query_one("#model", Select).value = "light"
+                self.assertEqual(app.query_one("#model", Select).value, "default")
+                app.query_one("#model", Select).value = "gemini-small"
                 await pilot.pause(0.2)
-                self.assertEqual(app.model, "light")
+                self.assertEqual(app.model, "gemini-small")
                 self.assertEqual(app.cli, "gemini")   # the model selector must not be mistaken for the CLI one
                 await pilot.press("enter")
                 await self.until(pilot, lambda: not app.is_running, timeout=8)
-            self.assertEqual(app.return_value.model, "light")
+            self.assertEqual(app.return_value.model, "gemini-small")
         run(go())
 
     def test_the_selector_offers_the_models_of_the_chosen_cli(self):
@@ -111,7 +111,7 @@ class UiTests(unittest.TestCase):
             async with app.run_test(size=(140, 40)) as pilot:
                 await self.selecting(pilot)
                 values = [v for _label, v in app.query_one("#model", Select)._options if v is not Select.BLANK]
-                self.assertEqual(values, ["auto", "default", "light", "standard", "strong", "gemini-big", "gemini-small"])
+                self.assertEqual(values, ["default", "gemini-big", "gemini-small"])
                 app.query_one("#model", Select).value = "gemini-small"
                 await pilot.pause(0.2)
                 self.assertEqual(app.model, "gemini-small")
@@ -120,7 +120,7 @@ class UiTests(unittest.TestCase):
                 values = [v for _label, v in app.query_one("#model", Select)._options if v is not Select.BLANK]
                 self.assertIn("claude-big", values)
                 self.assertNotIn("gemini-big", values)
-                self.assertEqual(app.model, "auto")
+                self.assertEqual(app.model, "default")
         run(go())
 
     def test_steps_one_and_two_run_by_themselves_then_selection_opens(self):

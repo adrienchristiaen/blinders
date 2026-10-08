@@ -36,7 +36,7 @@ class ScanTests(Sandbox):
         self.standard_repos()
         repos = {r.name: r for r in build_index(self.cfg)}
         cp = repos["carrefour-pipelines"]
-        self.assertIn("dbt", cp.markers)
+        self.assertIn("dbt", cp.terms)   # from the file name dbt_project.yml, no marker table
         self.assertTrue(cp.description.startswith("Airflow DAGs"))
         self.assertIn("bigquery", cp.terms)
 

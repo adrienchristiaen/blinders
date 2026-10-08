@@ -64,9 +64,7 @@ class Config:
     hints_max_files: int = 4
     # interactive entry point
     default_cli: str = ""          # used by a bare `blind`; empty = ask or autodetect
-    # model routing: a lighter or stronger model only when the prompt clearly calls for it
-    models_auto: bool = True
-    models: dict[str, dict[str, str]] = field(default_factory=dict)  # per CLI: light / standard / strong
+    models: dict[str, dict[str, str]] = field(default_factory=dict)  # per CLI: {"default": "<model>"}
     # Gemini only applies workspace settings in a trusted folder; the blind workspace is ours
     gemini_trust_workspace: bool = True
     # a per-session Gemini home: only the kept skills, extensions and MCP servers, no includeDirectories
@@ -122,7 +120,6 @@ def load_config(path: Path | None = None) -> Config:
     cfg.hints_enabled = bool(hints.get("enabled", cfg.hints_enabled))
     cfg.hints_max_files = int(hints.get("max_files", cfg.hints_max_files))
     models = data.get("models", {})
-    cfg.models_auto = bool(models.get("auto", cfg.models_auto))
     cfg.models = {k: {t: str(m) for t, m in v.items()} for k, v in models.items() if isinstance(v, dict)}
     gem = data.get("gemini", {})
     cfg.gemini_trust_workspace = bool(gem.get("trust_workspace", cfg.gemini_trust_workspace))

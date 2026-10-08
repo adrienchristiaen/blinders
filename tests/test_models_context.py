@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from blinders import cli
-from blinders.models import choose_model, classify
+from blinders.models import resolve_model
 from blinders.scan import describe_repo
 from blinders.skills import discover, select_skills
 
@@ -13,57 +13,21 @@ from helpers import Sandbox, make_repo, session_of
 from test_start import run_cli, write_skills
 
 
-class ClassifyTests(unittest.TestCase):
-    def test_short_question_on_one_repo_is_light(self):
-        self.assertEqual(classify("où est défini le client Kafka ?", 1)[0], "light")
-        self.assertEqual(classify("explain what the retry decorator does", 1)[0], "light")
+class ResolveModelTests(Sandbox):
+    """No word lists: the model is what you set, never guessed from the prompt."""
 
-    def test_edits_are_never_light(self):
-        self.assertEqual(classify("explique et corrige le client Kafka", 1)[0], "standard")
-        self.assertEqual(classify("add a retry to the client", 1)[0], "standard")
+    def test_nothing_set_means_the_cli_keeps_its_own(self):
+        self.assertIsNone(resolve_model("gemini", None, self.cfg))
 
-    def test_design_across_repos_is_strong(self):
-        self.assertEqual(classify("refactor the architecture of the ingestion", 3)[0], "strong")
-        self.assertEqual(classify("trouve la cause racine du bug, bout en bout", 1)[0], "strong")
+    def test_config_default_is_used_per_cli(self):
+        self.cfg.models = {"gemini": {"default": "flash"}}
+        self.assertEqual(resolve_model("gemini", None, self.cfg), "flash")
+        self.assertIsNone(resolve_model("claude", None, self.cfg))
 
-    def test_one_strong_word_alone_stays_standard(self):
-        self.assertEqual(classify("migrate the config file", 1)[0], "standard")
-
-    def test_long_prompt_across_repos_is_strong(self):
-        self.assertEqual(classify("x " * 700, 3, 1)[0], "strong")
-
-    def test_many_opened_repos_alone_stay_standard(self):
-        self.assertEqual(classify("regarde ce repo", 3)[0], "standard")
-
-
-class ChooseModelTests(Sandbox):
-    def test_standard_passes_no_name(self):
-        c = choose_model("gemini", "ajoute un test", 1, 0, self.cfg)
-        self.assertEqual((c.tier, c.model), ("standard", None))
-
-    def test_only_strong_has_a_default_light_needs_your_choice(self):
-        light = choose_model("gemini", "où est le client ?", 1, 0, self.cfg)
-        self.assertEqual((light.tier, light.model), ("light", None))
-        self.assertIn("no light model set in [models.gemini]", light.reason)
-        self.assertIsNone(choose_model("claude", "où est le client ?", 1, 0, self.cfg).model)
-        self.cfg.models = {"gemini": {"light": "flash-lite"}}
-        self.assertEqual(choose_model("gemini", "où est le client ?", 1, 0, self.cfg).model, "flash-lite")
-        self.assertEqual(choose_model("gemini", "refactor architecture", 1, 0, self.cfg).model, "pro")
-
-    def test_config_overrides_and_unknown_cli(self):
-        self.cfg.models = {"gemini": {"light": "gemini-9-lite"}}
-        self.assertEqual(choose_model("gemini", "où est le client ?", 1, 0, self.cfg).model, "gemini-9-lite")
-        self.assertIsNone(choose_model("codex", "où est le client ?", 1, 0, self.cfg).model)
-
-    def test_specs(self):
-        self.assertIsNone(choose_model("gemini", "où est le client ?", 1, 0, self.cfg, "default"))
-        self.assertEqual(choose_model("gemini", "x", 0, 0, self.cfg, "strong").model, "pro")
-        self.assertEqual(choose_model("gemini", "x", 0, 0, self.cfg, "my-model").model, "my-model")
-        self.cfg.models_auto = False
-        self.assertIsNone(choose_model("gemini", "où est le client ?", 1, 0, self.cfg))
-
-    def test_no_prompt_no_choice(self):
-        self.assertIsNone(choose_model("gemini", "", 0, 0, self.cfg))
+    def test_explicit_name_wins_and_default_means_hands_off(self):
+        self.cfg.models = {"gemini": {"default": "flash"}}
+        self.assertEqual(resolve_model("gemini", "pro", self.cfg), "pro")
+        self.assertIsNone(resolve_model("gemini", "default", self.cfg))
 
 
 class LaunchTests(Sandbox):
@@ -74,13 +38,13 @@ class LaunchTests(Sandbox):
         d.mkdir(parents=True)
         (d / "config.toml").write_text(f'roots = ["{self.work}"]\n')
 
-    def test_gemini_workspace_stops_the_upward_search_and_asks_for_a_light_model(self):
+    def test_gemini_workspace_stops_the_upward_search_and_passes_the_configured_model(self):
         d = Path(os.environ["BLINDERS_CONFIG_DIR"])
-        (d / "config.toml").write_text(f'roots = ["{self.work}"]\n[models.gemini]\nlight = "flash-lite"\n')
+        (d / "config.toml").write_text(f'roots = ["{self.work}"]\n[models.gemini]\ndefault = "flash-lite"\n')
         code, out, err = run_cli("run", "gemini", "--dry-run", "--mcp", "none", "où est la classe principale de sales-api-java ?")
         self.assertEqual(code, 0)
         self.assertIn("-m flash-lite", out)
-        self.assertIn("model flash-lite (light)", err)
+        self.assertIn("model flash-lite", err)
         conf = json.loads((session_of(out) / ".gemini" / "settings.json").read_text())
         self.assertEqual(conf["context"]["memoryBoundaryMarkers"], [])
 
@@ -98,9 +62,9 @@ class LaunchTests(Sandbox):
         self.assertIn("-m pro", out)
 
     def test_claude_gets_its_own_flag_and_vibe_none(self):
-        _, out, _ = run_cli("run", "claude", "--dry-run", "--model", "strong", "hello")
+        _, out, _ = run_cli("run", "claude", "--dry-run", "--model", "opus", "hello")
         self.assertIn("--model opus", out)
-        _, out, _ = run_cli("run", "vibe", "--dry-run", "--model", "strong", "hello")
+        _, out, _ = run_cli("run", "vibe", "--dry-run", "--model", "opus", "hello")
         self.assertNotIn("opus", out)
 
     def test_trust_env_is_set_for_gemini_only(self):

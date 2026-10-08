@@ -4,7 +4,6 @@ import unittest
 from pathlib import Path
 
 from blinders import geminihome
-from blinders.models import classify
 from blinders.skills import discover
 
 from helpers import Sandbox
@@ -298,47 +297,6 @@ class RtkLaunchTests(HomeSandbox):
         session = session_of(out)
         self.assertNotIn("hooks", json.loads((session / "gemini-home" / ".gemini" / "settings.json").read_text()))
         self.assertNotIn("rtk proxy", (session / "GEMINI.md").read_text())
-
-
-class ModelCommandTests(HomeSandbox):
-    def setUp(self):
-        super().setUp()
-        self.sales_repos()
-        d = Path(os.environ["BLINDERS_CONFIG_DIR"])
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "config.toml").write_text(f'roots = ["{self.work}"]\n')
-
-    def test_blind_model_explains_a_light_choice(self):
-        d = Path(os.environ["BLINDERS_CONFIG_DIR"])
-        (d / "config.toml").write_text(f'roots = ["{self.work}"]\n[models.gemini]\nlight = "flash-lite"\n')
-        code, out, _ = run_cli("model", "où", "est", "la", "classe", "principale", "?", "-r", "sales-api-java")
-        self.assertEqual(code, 0)
-        self.assertIn("tier:   light", out)
-        self.assertIn("flag:   -m flash-lite", out)
-
-    def test_blind_model_explains_why_it_stayed_standard(self):
-        _, out, _ = run_cli("model", "ajoute", "un", "test", "-r", "sales-api-java")
-        self.assertIn("tier:   standard", out)
-        self.assertIn("asks for work (ajoute)", out)
-        self.assertIn("none (the CLI picks", out)
-
-    def test_a_configured_standard_model_is_always_passed(self):
-        d = Path(os.environ["BLINDERS_CONFIG_DIR"])
-        (d / "config.toml").write_text(f'roots = ["{self.work}"]\n[models.gemini]\nstandard = "flash"\n')
-        _, out, _ = run_cli("model", "ajoute", "un", "test", "-r", "sales-api-java")
-        self.assertIn("flag:   -m flash", out)
-
-
-class RouterTests(unittest.TestCase):
-    def test_plain_questions_are_light_even_on_two_repos_or_with_a_noun_like_lineage(self):
-        self.assertEqual(classify("tu peux me dire le lineage de sales-api-java", 2)[0], "light")
-        self.assertEqual(classify("c'est quoi le rôle de ce service ?", 2)[0], "light")
-        self.assertEqual(classify("how does the pricing rule work?", 1)[0], "light")
-
-    def test_work_requests_are_not_light(self):
-        self.assertEqual(classify("peux-tu refactorer le client ?", 1)[0], "standard")
-        self.assertEqual(classify("ajoute un test sur le client", 1)[0], "standard")
-        self.assertEqual(classify("une très longue question ? " + "x " * 300, 1)[0], "standard")
 
 
 if __name__ == "__main__":

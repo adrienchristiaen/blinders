@@ -1,57 +1,37 @@
 """Relations between repos, computed offline at index time. No LLM, no source parsing.
 
-Three signals:
+Two signals, both read from the user's own repos (no list of file names, stacks or words):
 
-- ``refs``: a repo's build and deploy files (Helm, Kubernetes, Docker, CI, Terraform,
-  pom.xml, package.json, ...) mention another repo's name or artifact name.
+- ``refs``: a small text file near the top of a repo (build, deploy, CI, config... whatever it uses)
+  mentions another repo by name. A repo is known by its directory name and by the name it declares for
+  itself in a root file (``name = "x"``, ``"name": "x"``, ``<artifactId>x</artifactId>``).
 - ``name``: one repo name is a hyphen-prefix of another (``sales-api`` / ``sales-api-java``).
-- explicit groups from ``config.toml`` (applied at selection time, see ``select.py``).
 
-Links are stored on each repo as ``{"to": <repo path>, "w": weight, "kind": ...}``.
+Explicit groups come from ``config.toml`` (applied at selection time, see ``select.py``).
+Links are stored on each repo as ``{"to": <repo path>, "w": weight, "kind": ...}``. A repo that most
+other repos mention says little about any one of them, so its links weigh less (inverse frequency).
 """
 
 from __future__ import annotations
 
-import json
-import os
+import math
 import re
 from pathlib import Path
 
+from .files import iter_files
 from .text import squash
 
-SKIP_DIRS = {
-    "node_modules", ".git", ".venv", "venv", "target", "dist", "build",
-    "__pycache__", ".cache", ".gradle", ".idea", "vendor",
-}
-DEPLOY_DIRS = {
-    "helm", "charts", "chart", "k8s", "kubernetes", "deploy", "deployment", "deployments",
-    "manifests", "kustomize", "overlays", "base", "argocd", "flux", "infra", "terraform",
-    ".github", "workflows", ".gitlab",
-}
-REF_FILENAMES = {
-    "dockerfile", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml",
-    "jenkinsfile", ".gitlab-ci.yml", "chart.yaml", "values.yaml", "kustomization.yaml",
-    "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
-    "build.sbt", "package.json", "pyproject.toml", "requirements.txt", "makefile",
-    "skaffold.yaml", "cloudbuild.yaml",
-}
-REF_EXTENSIONS = {".tf", ".tfvars"}
-YAML_EXTENSIONS = {".yaml", ".yml"}
 MAX_FILE_BYTES = 64 * 1024
 MAX_TEXT_BYTES = 256 * 1024
 MAX_FILES = 150
-MAX_DEPTH = 4
+MAX_DEPTH = 3
 MAX_COUNT = 5
-
-# Too common to mean "this other repo" when they appear in a manifest.
-GENERIC = frozenset(
-    """
-    service services server client common shared utils util core parent default
-    application backend frontend library libs project deploy deployment
-    """.split()
-)
+MIN_IDENTITY = 5       # characters: shorter names are too likely to be an ordinary word
 
 _TOKEN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_DECLARED = re.compile(r"""\bname["']?\s*(?::=|=|:)\s*["']?([A-Za-z0-9_.\-]+)""")
+_ARTIFACT = re.compile(r"<artifactId>\s*([^<\s]+)\s*</artifactId>")
+_PARENT = re.compile(r"<parent>.*?</parent>", re.S)
 
 
 def normalize(name: str) -> str:
@@ -59,73 +39,48 @@ def normalize(name: str) -> str:
     return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", name.lower())).strip("-")
 
 
+def _read_text(path: Path, limit: int = MAX_FILE_BYTES) -> str:
+    """Head of a text file; empty for a binary file or one that cannot be read."""
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read(limit)
+    except OSError:
+        return ""
+    return "" if b"\x00" in raw[:1024] else raw.decode("utf-8", errors="ignore")
+
+
 def collect_ref_text(path: Path) -> str:
-    """Concatenate a bounded amount of build/deploy file text (never application source)."""
+    """A bounded amount of text from the files nearest the top of the repo (shallowest first). Deep folders,
+    where application code lives, are out of reach by design."""
     chunks: list[str] = []
-    total = files = 0
-    base_depth = len(path.parts)
-    for dirpath, dirnames, filenames in os.walk(path):
-        depth = len(Path(dirpath).parts) - base_depth
-        dirnames[:] = [
-            d for d in sorted(dirnames)
-            if d not in SKIP_DIRS and (not d.startswith(".") or d in DEPLOY_DIRS)
-        ] if depth < MAX_DEPTH else []
-        in_deploy_dir = any(p.lower() in DEPLOY_DIRS for p in Path(dirpath).relative_to(path).parts)
-        for fname in sorted(filenames):
-            low = fname.lower()
-            ext = Path(low).suffix
-            wanted = (
-                low in REF_FILENAMES
-                or ext in REF_EXTENSIONS
-                or (in_deploy_dir and ext in YAML_EXTENSIONS)
-            )
-            if not wanted:
-                continue
-            try:
-                with open(Path(dirpath) / fname, "r", encoding="utf-8", errors="ignore") as fh:
-                    chunk = fh.read(MAX_FILE_BYTES)
-            except OSError:
-                continue
+    total = 0
+    for file in iter_files(path, MAX_DEPTH, MAX_FILES):
+        chunk = _read_text(file)
+        if chunk:
             chunks.append(chunk)
             total += len(chunk)
-            files += 1
-            if total >= MAX_TEXT_BYTES or files >= MAX_FILES:
-                return "\n".join(chunks)
+            if total >= MAX_TEXT_BYTES:
+                break
     return "\n".join(chunks)
 
 
 def identities(path: Path) -> set[str]:
-    """Names other repos may use to refer to this one: directory name and artifact names."""
+    """Names other repos may use for this one: its directory name and the names its root files declare."""
     ids = {normalize(path.name)}
-
-    def read(name: str) -> str:
-        try:
-            return (path / name).read_text(encoding="utf-8", errors="ignore")[:MAX_FILE_BYTES]
-        except OSError:
-            return ""
-
-    pom = re.sub(r"<parent>.*?</parent>", "", read("pom.xml"), flags=re.S)
-    m = re.search(r"<artifactId>\s*([^<\s]+)\s*</artifactId>", pom)
-    if m:
-        ids.add(normalize(m.group(1)))
-    for fname in ("settings.gradle", "settings.gradle.kts"):
-        m = re.search(r"rootProject\.name\s*=\s*['\"]([^'\"]+)['\"]", read(fname))
-        if m:
-            ids.add(normalize(m.group(1)))
-    m = re.search(r"""name\s*:=\s*["']([^"']+)["']""", read("build.sbt"))
-    if m:
-        ids.add(normalize(m.group(1)))
-    # Chart.yaml is deliberately not read: a deploy repo's chart carries the *app's* name.
-    m = re.search(r"""^name\s*=\s*["']([^"']+)["']""", read("pyproject.toml"), flags=re.M)
-    if m:
-        ids.add(normalize(m.group(1)))
     try:
-        pkg = json.loads(read("package.json") or "{}")
-        if isinstance(pkg, dict) and isinstance(pkg.get("name"), str):
-            ids.add(normalize(pkg["name"].split("/")[-1]))
-    except ValueError:
-        pass
-    return {i for i in ids if len(squash(i)) >= 5 and i not in GENERIC}
+        root_files = [p for p in sorted(path.iterdir()) if p.is_file()]
+    except OSError:
+        root_files = []
+    for file in root_files:
+        text = _read_text(file)
+        if not text:
+            continue
+        text = _PARENT.sub("", text)
+        for pattern in (_DECLARED, _ARTIFACT):
+            m = pattern.search(text)
+            if m:
+                ids.add(normalize(m.group(1)))
+    return {i for i in ids if len(squash(i)) >= MIN_IDENTITY}
 
 
 def _mentions(text: str, id_map: dict[str, str | None]) -> dict[str, int]:
@@ -172,11 +127,17 @@ def compute_links(repos: list, texts: dict[str, str]) -> None:
         cur = links[a].get((b, kind), 0.0)
         links[a][(b, kind)] = max(cur, weight)
 
+    mentions = {repo.path: _mentions(texts.get(repo.path, ""), id_map) for repo in repos}
+    mentioned_by: dict[str, int] = {}
+    for found in mentions.values():
+        for owner in found:
+            mentioned_by[owner] = mentioned_by.get(owner, 0) + 1
     for repo in repos:
-        for owner, count in _mentions(texts.get(repo.path, ""), id_map).items():
+        for owner, count in mentions[repo.path].items():
             if owner == repo.path:
                 continue
-            weight = 1.0 + 0.5 * min(count, MAX_COUNT)
+            rarity = math.log(1 + len(repos) / mentioned_by[owner])
+            weight = (1.0 + 0.5 * min(count, MAX_COUNT)) * rarity
             add(repo.path, owner, "refs", weight)
             add(owner, repo.path, "refd_by", weight)
 

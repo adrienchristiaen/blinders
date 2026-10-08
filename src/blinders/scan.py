@@ -16,25 +16,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .config import Config, cache_dir
+from .files import SKIP_DIRS, iter_files
 from .relations import collect_ref_text, compute_links, identities
 from .text import tokens
 
-SKIP_DIRS = {
-    "node_modules", ".git", ".venv", "venv", "target", "dist", "build",
-    "__pycache__", ".cache", ".gradle", ".idea", "vendor",
-}
-MARKERS = {
-    "pom.xml": "java/maven", "build.gradle": "gradle", "build.gradle.kts": "gradle",
-    "build.sbt": "scala", "package.json": "node", "pyproject.toml": "python",
-    "requirements.txt": "python", "go.mod": "go", "Cargo.toml": "rust",
-    "Dockerfile": "docker", "dbt_project.yml": "dbt", "Chart.yaml": "helm",
-    "airflow.cfg": "airflow", "kustomization.yaml": "kustomize", "skaffold.yaml": "kubernetes",
-}
-APP_MARKERS = {"java/maven", "gradle", "scala", "node", "python", "go", "rust"}
-DEPLOY_MARKERS = {"helm", "kustomize", "kubernetes", "terraform"}
-DEPLOY_TOP_DIRS = {"k8s", "kubernetes", "helm", "charts", "chart", "deploy", "deployment", "manifests", "terraform", "infra", "argocd"}
-DATA_MARKERS = {"dbt", "airflow"}
-DATA_TOP_DIRS = {"dags", "models", "sql", "pipelines"}
 GRAPH_REPORT = Path("graphify-out") / "GRAPH_REPORT.md"
 CONTEXT_FILES = ("AGENTS.md", "CLAUDE.md", "GEMINI.md")
 README_BYTES = 4096
@@ -47,10 +32,8 @@ class Repo:
     name: str
     path: str
     description: str = ""
-    markers: list[str] = field(default_factory=list)
     top_dirs: list[str] = field(default_factory=list)
     terms: dict[str, int] = field(default_factory=dict)
-    roles: list[str] = field(default_factory=list)       # app | deploy | data
     identities: list[str] = field(default_factory=list)  # names other repos may use for this one
     links: list[dict] = field(default_factory=list)      # {"to": path, "w": weight, "kind": ...}
     graph_report: str = ""                               # path to graphify-out/GRAPH_REPORT.md if present
@@ -73,33 +56,33 @@ def _first_paragraph(readme: str) -> str:
     return ""
 
 
-MAX_PATH_ENTRIES = 4000     # files and folders visited per repo
+MAX_PATH_FILES = 4000
+MAX_PATH_DEPTH = 8
 MAX_PATH_TERMS = 300
 YAML_NAME = re.compile(r"^\s*-?\s*name:\s*['\"]?([A-Za-z0-9_.\-]+)", re.M)
-YAML_DIRS = ("models", "snapshots", "seeds", "dags")
+YAML_SUFFIXES = (".yml", ".yaml")
+MAX_YAML_FILES = 40
 
 
 def path_terms(path: Path) -> Counter[str]:
-    """Words from folder and file names (``fct_orders.sql`` gives fct, orders) plus the model, source and
-    table names declared in the YAML of a dbt project. Reads names and a few small YAML heads, never code.
-    This is what lets a repo with no README (only SQL, only manifests) be found by what it contains."""
+    """Words from folder and file names (``fct_orders.sql`` gives fct, orders) and from the ``name:`` entries
+    of small YAML files (dbt models, sources and tables, Helm values, CI jobs...). Reads names and a few
+    heads of YAML, no code. This is what lets a repo with no README be found by what it contains, whatever
+    its stack: nothing here knows what a "dbt" or a "chart" is."""
     counts: Counter[str] = Counter()
-    seen = 0
+    seen_dirs: set[Path] = set()
     yamls: list[Path] = []
-    for root, dirs, files in os.walk(path):
-        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith("."))
-        rel = Path(root).relative_to(path)
-        in_yaml_dir = bool(rel.parts) and rel.parts[0] in YAML_DIRS
-        for name in dirs + sorted(files):
-            seen += 1
-            stem = name.rsplit(".", 1)[0] if "." in name[1:] else name
-            counts.update(tokens(stem))
-            if in_yaml_dir and name.endswith((".yml", ".yaml")) and len(yamls) < 40:
-                yamls.append(Path(root) / name)
-        if seen >= MAX_PATH_ENTRIES:
-            break
-    project = path / "dbt_project.yml"
-    for f in ([project] if project.is_file() else []) + yamls:
+    for file in iter_files(path, MAX_PATH_DEPTH, MAX_PATH_FILES):
+        rel = file.relative_to(path)
+        for i in range(1, len(rel.parts)):
+            directory = path / Path(*rel.parts[:i])
+            if directory not in seen_dirs:
+                seen_dirs.add(directory)
+                counts.update(tokens(rel.parts[i - 1]))
+        counts.update(tokens(file.stem if "." in file.name[1:] else file.name))
+        if file.name.endswith(YAML_SUFFIXES) and len(yamls) < MAX_YAML_FILES:
+            yamls.append(file)
+    for f in yamls:
         for declared in YAML_NAME.findall(_read_head(f, 4096)):
             counts.update(tokens(declared))
     return counts
@@ -116,17 +99,6 @@ def describe_repo(path: Path, map_globs: list[str]) -> Repo:
     except OSError:
         entries = []
     top_dirs = [e for e in entries if (path / e).is_dir() and not e.startswith(".") and e not in SKIP_DIRS]
-    marker_set = {MARKERS[e] for e in entries if e in MARKERS}
-    if any(e.endswith(".tf") for e in entries):
-        marker_set.add("terraform")
-    markers = sorted(marker_set)
-    roles = []
-    if marker_set & APP_MARKERS and not (marker_set & DEPLOY_MARKERS and not top_dirs):
-        roles.append("app")
-    if marker_set & DEPLOY_MARKERS or set(top_dirs) & DEPLOY_TOP_DIRS:
-        roles.append("deploy")
-    if marker_set & DATA_MARKERS or set(top_dirs) & DATA_TOP_DIRS:
-        roles.append("data")
 
     chunks = [path.name] * 3 + [readme] + top_dirs
     for name in CONTEXT_FILES:
@@ -139,7 +111,6 @@ def describe_repo(path: Path, map_globs: list[str]) -> Repo:
     counts: Counter[str] = Counter()
     for chunk in chunks:
         counts.update(tokens(chunk))
-    counts.update(markers)
     terms = dict(counts.most_common(MAX_TERMS))
     for term, n in path_terms(path).most_common(MAX_PATH_TERMS):
         terms[term] = terms.get(term, 0) + n
@@ -147,10 +118,8 @@ def describe_repo(path: Path, map_globs: list[str]) -> Repo:
         name=path.name,
         path=str(path),
         description=_first_paragraph(readme),
-        markers=markers,
         top_dirs=top_dirs[:12],
         terms=terms,
-        roles=roles,
         identities=sorted(identities(path)),
         graph_report=str(path / GRAPH_REPORT) if (path / GRAPH_REPORT).is_file() else "",
     )

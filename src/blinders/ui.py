@@ -29,7 +29,6 @@ from textual.widgets.selection_list import Selection
 from .pipeline import STEP_TITLES, Emit, Event  # noqa: F401  (Emit re-exported for callers)
 from .uimodel import Backend, Item, UiPlan, UiResult
 
-MODEL_CHOICES = ("auto", "default", "light", "standard", "strong")
 DEBOUNCE = 0.25
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 BAR = 14
@@ -111,7 +110,7 @@ class BlindApp(App[UiResult | None]):
         super().__init__()
         self.clis, self.cli, self.initial_prompt, self.backend, self.status_text = clis, cli, prompt, backend, status
         self.plan = UiPlan()
-        self.model = "auto"                # auto | default | light | standard | strong
+        self.model = "default"             # "default" = leave the CLI alone, else a model name
         self.overrides: dict[str, dict[str, bool]] = {"repos": {}, "mcp": {}, "skills": {}}
         self.steps = {i: StepState() for i in STEP_TITLES}
         self.phase = "fleet"               # fleet -> select -> map -> done
@@ -122,8 +121,8 @@ class BlindApp(App[UiResult | None]):
         self._computed_for: tuple[str, str] | None = None
 
     def _model_options(self) -> list[tuple[str, str]]:
-        """blind decides (auto), the CLI decides (default), a tier, then the models this CLI really offers."""
-        options = [(f"model: {m}", m) for m in MODEL_CHOICES]
+        """The CLI decides (default), then the models this CLI really offers."""
+        options = [("model: CLI default", "default")]
         try:
             options += [(f"{model}  ·  {note}"[:60], model) for model, note in self.backend.models(self.cli) if model != "auto"]
         except Exception:  # noqa: BLE001 - a broken model list must not break the launcher
@@ -135,7 +134,7 @@ class BlindApp(App[UiResult | None]):
         yield Header(show_clock=False)
         with Horizontal(id="top"):
             yield Select([(c, c) for c in self.clis], value=self.cli, allow_blank=False, id="cli")
-            yield Select(self._model_options(), value="auto", allow_blank=False, id="model")
+            yield Select(self._model_options(), value="default", allow_blank=False, id="model")
             yield PromptArea(self.initial_prompt, id="prompt", soft_wrap=True, tab_behavior="focus",
                              placeholder="Type or paste your prompt while the repos are prepared (empty = fully blind session)")
         yield Static("", id="steps")
@@ -257,7 +256,7 @@ class BlindApp(App[UiResult | None]):
             self.cli = str(event.value)
             self.overrides["mcp"].clear()
             self.overrides["skills"].clear()
-            self.model = "auto"
+            self.model = "default"
             self.query_one("#model", Select).set_options(self._model_options())
             if self.phase == "select":
                 self._recompute()
