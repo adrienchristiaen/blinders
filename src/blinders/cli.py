@@ -23,6 +23,7 @@ from .pipeline import STEP_TITLES, Event, run_graphs, run_map, run_sync
 from . import stats as statsmod
 from . import skills as skillmod
 from .mcp import McpPlan, claude_config, discover, missing_names, select_mcp
+from . import models as modelsmod
 from .models import ModelChoice, choose_model
 from . import geminihome
 from .scan import Repo, build_index, load_index
@@ -133,6 +134,7 @@ def _parser() -> argparse.ArgumentParser:
     m.add_argument("prompt", nargs="*")
     m.add_argument("--cli", default="gemini")
     m.add_argument("-r", "--repos", help="repo names to count as opened (default: what the prompt selects)")
+    sub.add_parser("models", help="list the models your Gemini/Claude CLI offers, the tiers blind uses, and what to set")
     sub.add_parser("doctor", help="show which Python, UI, Graphify, git and CLIs blind can see")
 
     sub.add_parser("clean", help="remove all blind workspaces")
@@ -438,7 +440,7 @@ def launch(cfg: Config, lp: LaunchPlan, dry_run: bool) -> int:
         notes += f"; starting points: {sum(len(h.files) for h in lp.hints.values())} file(s)"
     if lp.ext_plan is not None and lp.ext_plan.dropped:
         notes += f"; extensions kept: {len(lp.ext_plan.kept)} (hidden {len(lp.ext_plan.dropped)})"
-    if lp.model is not None and lp.model.tier != "standard":
+    if lp.model is not None and lp.model.model:
         notes += f"; model {lp.model.model} ({lp.model.tier})"
     for note in (lp.mcp_note, lp.skills_note, lp.home_note):
         if note:
@@ -742,6 +744,9 @@ class FleetBackend:
     def hints(self, cli: str, prompt: str, names: list[str]) -> list[str]:
         return ui_hints(self.cfg, self.repos, prompt, names)
 
+    def models(self, cli: str) -> list[tuple[str, str]]:
+        return modelsmod.cli_models(cli, Path.home())
+
     def map(self, prompt: str, names: list[str], emit) -> None:
         chosen = [r for r in self.repos if r.name in set(names)]
         run_map(self.cfg, chosen, prompt, emit)
@@ -1015,7 +1020,30 @@ def cmd_model(args, cfg: Config) -> int:
         return 0
     print(f"tier:   {choice.tier} ({choice.reason})")
     print(f"flag:   {adapter.model_flag} {choice.model}" if choice.model else "flag:   none (the CLI picks its own model)")
-    print("force one with `--model light|standard|strong|<name>`, or in the launcher's model selector.")
+    print("force one with `--model light|standard|strong|<name>`, or in the launcher's model selector; `blind models` lists them.")
+    current = modelsmod.settings_model(Path.home())
+    if adapter.name == "gemini" and choice.model is None and (not current or current.startswith("auto")):
+        print("note: Gemini runs its own router (an extra model call per prompt). `blind models` shows how to avoid it.")
+    return 0
+
+
+def cmd_models(args, cfg: Config) -> int:
+    home = Path.home()
+    default = modelsmod.settings_model(home)
+    print(f"gemini default in settings.json: {default or 'none set (Gemini decides)'}")
+    if not default or default.startswith("auto"):
+        print("  Gemini's own router runs for each prompt (a separate small-model call, 14,641 input tokens in one of your sessions).\n"
+              "  A concrete model skips it: `blind gemini --model <id>`, the launcher selector, or\n"
+              "  [models.gemini] standard = \"<id>\" for every ordinary request.")
+    print("\nmodels you can pick (blind passes -m <id> to Gemini):")
+    for model, note in modelsmod.gemini_model_list(home):
+        print(f"  {model:<36} {note}")
+    table = modelsmod.models_for("gemini", cfg)
+    print("\ntiers blind uses for `--model auto`:")
+    for tier in ("light", "standard", "strong"):
+        print(f"  {tier:<9} {table.get(tier) or ('the CLI decides' if tier == 'standard' else 'not set')}")
+    print("\nto change them, in ~/.config/blinders/config.toml:\n  [models.gemini]\n  light = \"<id>\"\n  standard = \"<id>\"\n  strong = \"<id>\"")
+    print("access to a model depends on your Google account: the list shows what this Gemini CLI version knows.")
     return 0
 
 
@@ -1090,7 +1118,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_start(args, cfg, extra, cli)
     args = _parser().parse_args(argv)
     handlers = {
-        "setup": cmd_setup, "doctor": cmd_doctor, "model": cmd_model, "sync": cmd_sync, "status": cmd_status, "stats": cmd_stats, "init": cmd_init, "list": cmd_list, "select": cmd_select, "mcp": cmd_mcp,
+        "setup": cmd_setup, "doctor": cmd_doctor, "model": cmd_model, "models": cmd_models, "sync": cmd_sync, "status": cmd_status, "stats": cmd_stats, "init": cmd_init, "list": cmd_list, "select": cmd_select, "mcp": cmd_mcp,
         "graph": cmd_graph, "audit": cmd_audit, "clean": cmd_clean,
     }
     return handlers[args.cmd](args, cfg)

@@ -22,6 +22,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
+from textual.css.query import NoMatches
 from textual.widgets import Footer, Header, RichLog, Select, SelectionList, Static, TextArea
 from textual.widgets.selection_list import Selection
 
@@ -41,7 +42,7 @@ Header { background: #112343; color: #ffb84d; }
 Footer { background: #112343; }
 #top { height: auto; padding: 0 1; margin-top: 1; }
 #cli { width: 18; margin-right: 1; }
-#model { width: 24; margin-right: 1; }
+#model { width: 40; margin-right: 1; }
 #prompt { width: 1fr; height: auto; min-height: 3; max-height: 10; background: #112343; border: tall #2b4373; }
 #prompt:focus { border: tall #ffb84d; }
 #steps { height: auto; margin: 1 2 0 2; padding: 0 1; border: round #2b4373; }
@@ -120,12 +121,21 @@ class BlindApp(App[UiResult | None]):
         self._tick = 0
         self._computed_for: tuple[str, str] | None = None
 
+    def _model_options(self) -> list[tuple[str, str]]:
+        """blind decides (auto), the CLI decides (default), a tier, then the models this CLI really offers."""
+        options = [(f"model: {m}", m) for m in MODEL_CHOICES]
+        try:
+            options += [(f"{model}  ·  {note}"[:60], model) for model, note in self.backend.models(self.cli) if model != "auto"]
+        except Exception:  # noqa: BLE001 - a broken model list must not break the launcher
+            pass
+        return options
+
     # --- layout ---------------------------------------------------------------------------------
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
         with Horizontal(id="top"):
             yield Select([(c, c) for c in self.clis], value=self.cli, allow_blank=False, id="cli")
-            yield Select([(f"model: {m}", m) for m in MODEL_CHOICES], value="auto", allow_blank=False, id="model")
+            yield Select(self._model_options(), value="auto", allow_blank=False, id="model")
             yield PromptArea(self.initial_prompt, id="prompt", soft_wrap=True, tab_behavior="focus",
                              placeholder="Type or paste your prompt while the repos are prepared (empty = fully blind session)")
         yield Static("", id="steps")
@@ -216,7 +226,10 @@ class BlindApp(App[UiResult | None]):
                 out.append(st.detail, style=DIM if st.status in ("done",) else color)
             if i < len(STEP_TITLES):
                 out.append("\n")
-        self.query_one("#steps", Static).update(out)
+        try:
+            self.query_one("#steps", Static).update(out)
+        except NoMatches:   # the timer can fire once more while the screen is being torn down
+            return
 
     # --- step 3: selection --------------------------------------------------------------------------
     def _enter_select(self) -> None:
@@ -244,6 +257,8 @@ class BlindApp(App[UiResult | None]):
             self.cli = str(event.value)
             self.overrides["mcp"].clear()
             self.overrides["skills"].clear()
+            self.model = "auto"
+            self.query_one("#model", Select).set_options(self._model_options())
             if self.phase == "select":
                 self._recompute()
 

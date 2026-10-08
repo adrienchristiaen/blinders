@@ -169,6 +169,52 @@ class LaunchIntegrationTests(HomeSandbox):
         self.assertEqual(len(list((home / ".gemini" / "extensions").iterdir())), 2)
 
 
+class ModelListTests(HomeSandbox):
+    def test_blind_models_lists_default_recent_use_and_aliases_and_warns_about_the_router(self):
+        chats = self.gem / "tmp" / "abc" / "chats"
+        chats.mkdir(parents=True)
+        (chats / "s.json").write_text(json.dumps({"messages": [
+            {"type": "user"}, {"type": "gemini", "model": "gemini-3.8-flash"}, {"type": "gemini", "model": "gemini-3.8-flash"},
+            {"type": "gemini", "model": "gemini-2.5-pro"}]}))
+        (self.gem / "settings.json").write_text(json.dumps({"model": {"name": "auto"}}))
+        code, out, _ = run_cli("models")
+        self.assertEqual(code, 0)
+        self.assertIn("gemini-3.8-flash", out)
+        self.assertIn("used in your recent chats (2 replies)", out)
+        self.assertIn("gemini-2.5-pro", out)
+        for alias in ("pro", "flash", "flash-lite"):
+            self.assertRegex(out, rf"\n  {alias} ")
+        self.assertIn("Gemini's own router runs", out)
+
+    def test_a_concrete_default_is_listed_first_and_no_router_warning(self):
+        (self.gem / "settings.json").write_text(json.dumps({"model": {"name": "gemini-2.5-pro"}}))
+        _, out, _ = run_cli("models")
+        self.assertIn("settings.json: gemini-2.5-pro", out)
+        self.assertNotIn("Gemini's own router runs", out)
+        from blinders.models import gemini_model_list
+        self.assertEqual(gemini_model_list(self.home)[0], ("gemini-2.5-pro", "your default in settings.json"))
+
+    def test_installed_ids_come_from_the_cli_bundle(self):
+        bundle = self.tmp / "lib" / "gemini-cli" / "bundle"
+        bundle.mkdir(parents=True)
+        (bundle / "gemini.js").write_text("")
+        (bundle / "gemini.js").chmod(0o755)
+        (bundle / "chunk.js").write_text(
+            'var PRO = "gemini-9-pro";\nvar FLASH = "gemini-9-flash";\nvar NONE = "none";\n'
+            'var VALID_GEMINI_MODELS = /* @__PURE__ */ new Set([\n  PRO,\n  FLASH,\n  NONE,\n]);\n')
+        bindir = self.tmp / "bin"
+        bindir.mkdir()
+        (bindir / "gemini").symlink_to(bundle / "gemini.js")
+        os.environ["PATH"] = f"{bindir}{os.pathsep}{os.environ['PATH']}"
+        from blinders.models import installed_gemini_ids
+        self.assertEqual(installed_gemini_ids(), ["gemini-9-pro", "gemini-9-flash"])
+
+    def test_without_gemini_installed_the_aliases_still_show(self):
+        os.environ["PATH"] = str(self.tmp)   # no gemini on PATH
+        from blinders.models import gemini_model_list
+        self.assertEqual([m for m, _ in gemini_model_list(self.home)][:4], ["auto", "pro", "flash", "flash-lite"])
+
+
 class ToolOutputTests(HomeSandbox):
     def build(self):
         session = self.tmp / "session"
@@ -263,6 +309,8 @@ class ModelCommandTests(HomeSandbox):
         (d / "config.toml").write_text(f'roots = ["{self.work}"]\n')
 
     def test_blind_model_explains_a_light_choice(self):
+        d = Path(os.environ["BLINDERS_CONFIG_DIR"])
+        (d / "config.toml").write_text(f'roots = ["{self.work}"]\n[models.gemini]\nlight = "flash-lite"\n')
         code, out, _ = run_cli("model", "où", "est", "la", "classe", "principale", "?", "-r", "sales-api-java")
         self.assertEqual(code, 0)
         self.assertIn("tier:   light", out)

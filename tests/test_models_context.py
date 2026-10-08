@@ -41,15 +41,19 @@ class ChooseModelTests(Sandbox):
         c = choose_model("gemini", "ajoute un test", 1, 0, self.cfg)
         self.assertEqual((c.tier, c.model), ("standard", None))
 
-    def test_defaults_are_the_documented_aliases(self):
+    def test_only_strong_has_a_default_light_needs_your_choice(self):
+        light = choose_model("gemini", "où est le client ?", 1, 0, self.cfg)
+        self.assertEqual((light.tier, light.model), ("light", None))
+        self.assertIn("no light model set in [models.gemini]", light.reason)
+        self.assertIsNone(choose_model("claude", "où est le client ?", 1, 0, self.cfg).model)
+        self.cfg.models = {"gemini": {"light": "flash-lite"}}
         self.assertEqual(choose_model("gemini", "où est le client ?", 1, 0, self.cfg).model, "flash-lite")
-        self.assertEqual(choose_model("claude", "où est le client ?", 1, 0, self.cfg).model, "haiku")
         self.assertEqual(choose_model("gemini", "refactor architecture", 1, 0, self.cfg).model, "pro")
 
     def test_config_overrides_and_unknown_cli(self):
         self.cfg.models = {"gemini": {"light": "gemini-9-lite"}}
         self.assertEqual(choose_model("gemini", "où est le client ?", 1, 0, self.cfg).model, "gemini-9-lite")
-        self.assertIsNone(choose_model("codex", "où est le client ?", 1, 0, self.cfg))
+        self.assertIsNone(choose_model("codex", "où est le client ?", 1, 0, self.cfg).model)
 
     def test_specs(self):
         self.assertIsNone(choose_model("gemini", "où est le client ?", 1, 0, self.cfg, "default"))
@@ -71,6 +75,8 @@ class LaunchTests(Sandbox):
         (d / "config.toml").write_text(f'roots = ["{self.work}"]\n')
 
     def test_gemini_workspace_stops_the_upward_search_and_asks_for_a_light_model(self):
+        d = Path(os.environ["BLINDERS_CONFIG_DIR"])
+        (d / "config.toml").write_text(f'roots = ["{self.work}"]\n[models.gemini]\nlight = "flash-lite"\n')
         code, out, err = run_cli("run", "gemini", "--dry-run", "--mcp", "none", "où est la classe principale de sales-api-java ?")
         self.assertEqual(code, 0)
         self.assertIn("-m flash-lite", out)

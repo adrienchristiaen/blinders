@@ -50,5 +50,9 @@ class Backend:
     def hints(self, cli: str, prompt: str, names: list[str]) -> list[str]:
         return []
 
+    def models(self, cli: str) -> list[tuple[str, str]]:
+        """(model, note) pairs the CLI really offers, for the model selector."""
+        return []
+
     def map(self, prompt: str, names: list[str], emit: Emit) -> None:
         emit(Event(4, "done", "skipped", level="warn"))

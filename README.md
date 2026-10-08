@@ -153,9 +153,15 @@ Ton vrai `~/.gemini` n'est jamais modifié. Essai de bout en bout avec le vrai G
 
 ### Modèle selon la question
 
-`blind` choisit en local (sans token) un niveau de modèle d'après le prompt : `light` pour une question courte (point d'interrogation, « où », « quel », « explique », « tu peux me dire »...) sur au plus deux repos, sans verbe de modification ni verbe de conception (refactor, migrer, debug...) ; `strong` quand plusieurs signaux de conception ou de diagnostic s'accumulent (`refactor`, `architecture`, `cause racine`, `bout en bout`... plus plusieurs repos ouverts) ; sinon `standard`, qui ne passe rien et laisse la CLI choisir. Les noms viennent de `[models.<cli>]`, par défaut les alias documentés : Gemini `flash-lite` / `pro`, Claude `haiku` / `opus`. Pas de défaut pour `codex` et `vibe`. Le choix est affiché dans le plan et à l'écran de sélection. `--model default` laisse la CLI faire, `--model light|standard|strong|<nom>` force, un `-m` après `--` l'emporte, `[models] auto = false` désactive.
+`blind` classe le prompt en local (sans token) : `light` pour une question courte (point d'interrogation, « où », « quel », « explique », « tu peux me dire »...) sur au plus deux repos, sans verbe de modification ni de conception ; `strong` quand plusieurs signaux de conception ou de diagnostic s'accumulent (`refactor`, `architecture`, `cause racine`, `bout en bout`... plus plusieurs repos ouverts) ; sinon `standard`, qui ne passe rien et laisse la CLI choisir.
 
-`blind model "ton prompt" [-r repo]` affiche le niveau choisi, la raison (par exemple `asks for work (ajoute); not phrased as a question`) et le drapeau exact qui serait passé. Dans le lanceur plein écran, le sélecteur `model:` à côté de la CLI force `light`, `standard`, `strong` ou `default`. Pour imposer un modèle même à une demande « standard » (au lieu de laisser la CLI choisir) : `[models.gemini] standard = "flash"`. Le drapeau `-m` est bien appliqué par Gemini (vérifié avec Gemini 0.63 : « Routing bypassed by forced model directive »). Si ta session tourne quand même sur le modèle par défaut, c'est que blind a décidé « standard », et `blind model` te dit pourquoi.
+Les noms viennent de `[models.<cli>]`. Seul `strong` a une valeur par défaut (l'alias `pro` pour Gemini, `opus` pour Claude : Gemini résout `pro` vers le meilleur modèle Pro que ton compte peut utiliser). **Il n'y a pas de modèle `light` par défaut** : dans une comparaison réelle, `gemini-3.1-flash-lite` a donné une réponse moins détaillée, avec plus de requêtes (9 contre 6) et plus de tokens d'entrée (247 k contre 166 k) que `gemini-3.8-flash` sur la même demande. Si tu veux quand même un modèle léger : `[models.gemini] light = "<id>"`.
+
+`blind models` liste ce que ta CLI propose vraiment : ton modèle par défaut dans `settings.json`, les modèles qui ont répondu dans tes derniers chats (`~/.gemini/tmp/*/chats`), les alias (`auto`, `pro`, `flash`, `flash-lite`) et tous les identifiants que ta version de Gemini CLI connaît (lus dans le paquet installé : `gemini-2.5-pro`, `gemini-3.8-flash`...). Ton accès réel dépend de ton compte Google, que `blind` ne peut pas interroger : la liste montre ce que la CLI connaît, pas ce que Google t'autorise. Le sélecteur `model:` du lanceur plein écran affiche la même liste et passe `-m <id>` pour ce lancement.
+
+**Routeur automatique de Gemini.** Si ton `settings.json` met `model.name` sur `auto` (ou rien), Gemini lance son propre routeur avant de répondre : dans l'une de tes sessions, un appel `utility_router` de 14 641 tokens d'entrée. Un modèle concret passé avec `-m` le contourne (« Routing bypassed by forced model directive », vérifié avec Gemini 0.63). `[models.gemini] standard = "<id>"` impose un modèle aux demandes ordinaires.
+
+`blind models` affiche aussi les niveaux utilisés par `--model auto`. `blind model "ton prompt" [-r repo]` affiche le niveau choisi, la raison (par exemple `asks for work (ajoute); not phrased as a question`) et le drapeau exact. `--model default` laisse la CLI faire, `--model light|standard|strong|<id>` force, un `-m` après `--` l'emporte, `[models] auto = false` désactive le choix automatique.
 
 ### Sorties d'outils et RTK
 
@@ -236,9 +242,10 @@ slides-builder = ["keynote"]
 
 [models]
 auto = true                # false: ne jamais passer de modèle
-[models.gemini]
-light = "flash-lite"       # défauts; mets ici le nom exact que tu veux
-strong = "pro"
+[models.gemini]            # `blind models` liste les identifiants
+strong = "pro"             # défaut
+# light = "<id>"           # aucun par défaut
+# standard = "<id>"        # impose un modèle (évite le routeur auto de Gemini)
 
 [gemini]
 trust_workspace = true     # GEMINI_CLI_TRUST_WORKSPACE=true pour le workspace aveugle
@@ -277,7 +284,7 @@ dir_style = "link"         # repeat | comma | link
 - Les filtres MCP et skills ne couvrent que le niveau utilisateur, pas les plugins ni les extensions.
 - **Filtre de skills non testé en session réelle.** Pour Claude Code, `skillOverrides` vient de la documentation et du suivi d'issues (le réglage est peu documenté, et des issues signalent que `off` n'empêche pas l'appel explicite d'un skill). Pour Gemini, les clés `skills.disabled` et `context.memoryBoundaryMarkers` existent bien dans le code de la version 0.63 (relu dans le paquet npm), mais leur effet dans une vraie session n'a pas été observé, et Gemini n'applique les réglages d'un workspace que dans un dossier de confiance (d'où `GEMINI_CLI_TRUST_WORKSPACE`, qui approuve le dossier de travail de la session, c'est-à-dire le workspace aveugle).
 - **RTK** : le hook et la réécriture `git status` → `rtk git status` ont été vérifiés (Gemini 0.63 enregistre bien le hook de la session, et le hook renvoie la commande réécrite), mais pas dans une session avec un vrai appel de modèle. RTK condense avec perte : si une sortie semble incomplète, `rtk proxy <commande>` donne la sortie brute. Les gains en caractères ci-dessus sont sur ce dépôt, pas sur les tiens.
-- **Choix du modèle** : heuristique sur des mots-clés, pas une mesure. Un `light` mal choisi donne une réponse plus faible, un `strong` coûte plus cher. Les alias `flash-lite`/`pro`/`haiku`/`opus` viennent de la documentation et du code des CLI, pas d'un lancement réel. Corrige avec `[models.<cli>]` ou `--model default`. Vérifie avec `blind gemini --dry-run` puis dans la session (`/skills`).
+- **Choix du modèle** : heuristique sur des mots-clés, pas une mesure. Un `light` mal choisi donne une réponse plus faible, un `strong` coûte plus cher. Les alias `pro`/`opus` viennent de la documentation et du code des CLI ; `-m` est confirmé par le journal de Gemini, pas la qualité des réponses. Corrige avec `[models.<cli>]` ou `--model default`. Vérifie avec `blind gemini --dry-run` puis dans la session (`/skills`).
 - `blind audit` estime en caractères / 4, pas avec un vrai tokenizer, et ne mesure pas la taille des schémas d'outils MCP (seulement leur nombre).
 
 ## Site

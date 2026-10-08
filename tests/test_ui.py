@@ -58,6 +58,9 @@ if HAVE_TEXTUAL:
         def hints(self, cli, prompt, names):
             return self.hint_fn(cli, prompt, names) if self.hint_fn else []
 
+        def models(self, cli):
+            return [(f"{cli}-big", "your default"), (f"{cli}-small", "used recently")]
+
         def map(self, prompt, names, emit):
             self.map_calls.append((prompt, list(names)))
             emit(Event(4, "start", "reading 1 graph", 0, 1))
@@ -99,6 +102,25 @@ class UiTests(unittest.TestCase):
                 await pilot.press("enter")
                 await self.until(pilot, lambda: not app.is_running, timeout=8)
             self.assertEqual(app.return_value.model, "light")
+        run(go())
+
+    def test_the_selector_offers_the_models_of_the_chosen_cli(self):
+        async def go():
+            from textual.widgets import Select
+            app = self.app("alpha")
+            async with app.run_test(size=(140, 40)) as pilot:
+                await self.selecting(pilot)
+                values = [v for _label, v in app.query_one("#model", Select)._options if v is not Select.BLANK]
+                self.assertEqual(values, ["auto", "default", "light", "standard", "strong", "gemini-big", "gemini-small"])
+                app.query_one("#model", Select).value = "gemini-small"
+                await pilot.pause(0.2)
+                self.assertEqual(app.model, "gemini-small")
+                app.query_one("#cli", Select).value = "claude"
+                await pilot.pause(0.3)
+                values = [v for _label, v in app.query_one("#model", Select)._options if v is not Select.BLANK]
+                self.assertIn("claude-big", values)
+                self.assertNotIn("gemini-big", values)
+                self.assertEqual(app.model, "auto")
         run(go())
 
     def test_steps_one_and_two_run_by_themselves_then_selection_opens(self):
