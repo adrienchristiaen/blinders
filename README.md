@@ -8,8 +8,8 @@ Coding agents (Claude Code, Gemini CLI, Codex, Mistral Vibe) pay for everything 
 
 ## How it works
 
-1. `blind` indexes your repos once (names, README head, top-level folders, build and deploy files; never your source code).
-2. For each prompt it picks the repos that match, plus the ones they are tied to (a Kubernetes repo that deploys the service, for example), and the MCP servers and skills that match.
+1. `blind` indexes your repos once, from what is in them: README head, folder and file names, names declared in small YAML files, which repo mentions which. It does not read your source code.
+2. For each prompt it picks the repos named in it, then the repos the rest of the prompt describes (name the app and talk about a schema, and the schema repo joins), plus the ones they are tied to (a Kubernetes repo that deploys the service, for example), and the MCP servers and skills that match.
 3. It starts your agent in a throwaway folder that contains only a short index, with the chosen repos added through the agent's own options (`--add-dir`, `--include-directories`). No hook, no patch of the agent.
 
 ## Install
@@ -52,9 +52,9 @@ One user's first measurements: context per request 23 to 28 % lower on a multi-r
 |---|---|
 | Claude Code, Gemini CLI | Flags checked against their `--help`. Gemini also gets a per-session home so unrelated `GEMINI.md` files are not loaded (checked on Gemini CLI 0.63). |
 | Codex, Mistral Vibe | **Experimental**: flags not verified. Check with `--dry-run`, adjust in `[adapters.*]`. |
-| Choosing a model per prompt | **Experimental**: a keyword heuristic. No light model is picked unless you set one. `blind model "prompt"` explains each decision; `[models] auto = false` turns it off. |
+| Choosing a model | You choose: `--model`, the launcher selector, or `[models.<cli>] default`. blind does not guess it from the words of a prompt. `blind models` lists what your CLI offers. |
 | Hiding MCP servers and skills | Works from the agents' documented options; not observed in every real session. |
-| Multi-repo tasks (app + deploy + schema repos) | Related repos are found from build and deploy files and from `[groups]` in the config. Improving this is the current work. |
+| Multi-repo tasks (app + deploy + schema repos) | Repos the rest of the prompt describes are opened; repos that reference the app are listed with the reason, to tick in the launcher. Learning from git history is next. |
 | Optional helpers | Graphify code graphs (`uv tool install graphifyy`) and [RTK](https://github.com/rtk-ai/rtk) output trimming, used only if installed. |
 | Windows | Not tested. |
 
@@ -64,7 +64,7 @@ Everything runs on your machine. `blind` makes no network call of its own and se
 
 ## Limits worth knowing
 
-- Selection is lexical, not semantic: a prompt with no word in common with a repo will not open it. Name the repo, declare a `[groups]` entry, or add a short `.blinders/*.md` map file.
+- Selection is lexical, not semantic: a prompt with no word in common with a repo will not open it. There is no list of words, stacks or file names inside blind, so it adapts to your repos; it also means it only knows what your repos say. Name the repo, declare a `[groups]` entry, or add a short `.blinders/*.md` map file.
 - "Blind" comes from how the agent is started, not from a block: if you add a repo or the agent reads `~`, it sees it.
 - Slash commands to add a repo in a running session (`/add-dir`, `/directory add`) are mentioned in the index but not tested in a real session.
 

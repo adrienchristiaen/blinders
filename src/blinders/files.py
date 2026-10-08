@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -10,7 +11,20 @@ from pathlib import Path
 SKIP_DIRS = {
     "node_modules", ".git", ".venv", "venv", "target", "dist", "build",
     "__pycache__", ".cache", ".gradle", ".idea", "vendor",
+    "graphify-out",   # the code-graph tool's own output, not part of the repo
 }
+YAML_SUFFIXES = (".yml", ".yaml")
+YAML_NAME = re.compile(r"^\s*-?\s*name:\s*['\"]?([A-Za-z0-9_.\-]+)", re.M)
+YAML_HEAD_BYTES = 4096
+
+
+def declared_names(file: Path) -> list[str]:
+    """``name:`` entries of a small YAML file (dbt models, sources and tables, Helm values, CI jobs...)."""
+    try:
+        with file.open("r", encoding="utf-8", errors="ignore") as fh:
+            return YAML_NAME.findall(fh.read(YAML_HEAD_BYTES))
+    except OSError:
+        return []
 
 
 def iter_files(root: Path, max_depth: int, limit: int) -> Iterator[Path]:

@@ -7,7 +7,7 @@ from blinders.files import iter_files
 from blinders.relations import identities
 from blinders.scan import build_index
 from blinders.select import select
-from blinders.text import stems
+from blinders.text import stems, ubiquitous
 
 from helpers import Sandbox, make_repo
 
@@ -16,6 +16,15 @@ class StemTests(unittest.TestCase):
     def test_inflections_and_translations_of_a_word_meet(self):
         self.assertEqual(set(stems("déployé deployment deploy")), {"deplo"})
         self.assertEqual(stems("tables")[0], stems("table")[0])
+
+
+class UbiquitousTests(unittest.TestCase):
+    def test_terms_found_in_half_the_items_or_more_are_noise(self):
+        items = [{"npx", "github"}, {"npx", "jira"}, {"uvx", "bigquery"}, {"npx", "slack"}]
+        self.assertEqual(ubiquitous(items, min_items=3), {"npx"})
+
+    def test_too_few_items_to_tell(self):
+        self.assertEqual(ubiquitous([{"a"}, {"a"}], min_items=3), set())
 
 
 class FileWalkTests(Sandbox):
@@ -55,6 +64,36 @@ class SelectionHasNoStoplistOfItsOwnTests(Sandbox):
         make_repo(self.work, "frontend", "A storefront.")
         repos = build_index(self.cfg)
         self.assertEqual([c.repo.name for c in select("lineage of the shipments table", repos, self.cfg)], ["bi-dbt"])
+
+
+class NamedRepoAndCompanionsTests(Sandbox):
+    """Naming one repo must not blind the selection to the others the rest of the prompt describes."""
+
+    def setUp(self):
+        super().setUp()
+        app = make_repo(self.work, "orders-app", "Spring service producing events.")
+        (app / "pom.xml").write_text("<artifactId>orders-app</artifactId>")
+        schemas = make_repo(self.work, "schema-manager", "Registry of event schemas.", dirs=("schemas",))
+        (schemas / "schemas" / "order_created.avsc").write_text("{}")
+        dbt = make_repo(self.work, "bi-dbt", "", dirs=("models",))
+        (dbt / "models" / "fct_orders.sql").write_text("select 1")
+        for i in range(3):
+            make_repo(self.work, f"misc-{i}", "Unrelated tool.")
+        self.repos = build_index(self.cfg)
+
+    def names(self, prompt):
+        return [c.repo.name for c in select(prompt, self.repos, self.cfg)]
+
+    def test_the_rest_of_the_prompt_brings_in_the_repo_that_describes_it(self):
+        self.assertEqual(self.names("modifier le schema OrderCreated de orders-app pour ajouter un champ"),
+                         ["orders-app", "schema-manager"])
+
+    def test_words_that_only_restate_the_named_repo_pull_nothing_else(self):
+        self.assertEqual(self.names("explique orders-app"), ["orders-app"])
+
+    def test_a_named_repo_comes_first_and_the_cap_still_applies(self):
+        self.cfg.max_repos = 1
+        self.assertEqual(self.names("modifier le schema OrderCreated de orders-app"), ["orders-app"])
 
 
 class LinksNeedNoFileNameTableTests(Sandbox):

@@ -429,10 +429,9 @@ def prepare(cfg: Config, lp: LaunchPlan, dry_run: bool) -> None:
                 r.graph_report = str(report) if report.is_file() else ""
     if lp.use_hints:
         for r in opened:
-            if r.graph_report:
-                h = find_hints(lp.prompt, r, cfg)
-                if h:
-                    lp.hints[r.name] = h
+            h = find_hints(lp.prompt, r, cfg)
+            if h:
+                lp.hints[r.name] = h
 
 
 def launch(cfg: Config, lp: LaunchPlan, dry_run: bool) -> int:
@@ -716,7 +715,7 @@ def ui_hints(cfg: Config, repos: list[Repo], prompt: str, names: list[str]) -> l
         return lines
     for n in names:
         r = by_name.get(n)
-        if r and r.graph_report:
+        if r:
             h = find_hints(prompt, r, cfg)
             if h:
                 lines.append(f"{n}: starting points")

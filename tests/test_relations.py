@@ -83,7 +83,7 @@ class PlanTests(Sandbox):
         self.assertEqual(related, ["sales-api"])
 
     def test_related_none_and_all(self):
-        p = plan("comment sales-api-java est déployé sur kubernetes", self.repos, self.cfg, related="none")
+        p = plan("explain sales-api-java", self.repos, self.cfg, related="none")
         self.assertEqual(self.names(p), (["sales-api-java"], []))
         p = plan("lineage de sales-api-java", self.repos, self.cfg, related="all")
         self.assertEqual(set(self.names(p)[0]), {"sales-api-java", "platform-k8s", "sales-api"})

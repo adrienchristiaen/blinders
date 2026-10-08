@@ -82,7 +82,7 @@ blind sync sales-api-java --safe            # un repo, sans changer de branche
 blind status                                # branche, repo modifié ou non, graphe absent ou périmé (local, sans réseau)
 
 blind select "lineage de sales-api-java"    # repos ouverts + repos liés (fermés), avec les scores
-blind list                                  # repos indexés (rôle, chemin)
+blind list                                  # repos indexés (chemin, description)
 blind mcp --cli gemini "mets à jour le jira" # quels MCP seraient gardés
 blind run claude --skills none "..."        # skills visibles : auto | all | none | a,b
 blind graph --all                           # graphes Graphify (optionnel)
@@ -94,8 +94,8 @@ Pour ouvrir un repo en cours de session : `/add-dir <chemin>` (Claude Code) ou `
 
 ## Fonctionnement
 
-1. **Index** (`blind setup` ou `blind init`, rafraîchi tous les jours) : trouve les repos git sous tes `roots` et lit le début du README, les noms de dossiers de premier niveau, des marqueurs (`pom.xml`, `dbt_project.yml`, `Chart.yaml`...) et des fichiers de carte optionnels (`graphify-out/*.md`). Il lit aussi, en quantité bornée, les fichiers de build et de déploiement (voir plus bas). Le code applicatif n'est jamais ouvert. Les noms de dossiers et de fichiers (`fct_orders.sql` donne `fct`, `orders`) entrent aussi dans le vocabulaire du repo, avec les noms de modèles, sources et tables déclarés dans le YAML d'un projet dbt : un repo sans README, fait seulement de SQL, est retrouvé par ce qu'il contient.
-2. **Sélection** : un repo nommé dans le prompt passe en tête (le nom le plus long gagne : « sales-api-java » n'ouvre pas aussi `sales-api`). Sinon, score de type TF-IDF entre le prompt et chaque repo. Aucun score, aucun repo ouvert : la session reste aveugle. Quelques millisecondes pour des centaines de repos.
+1. **Index** (`blind setup` ou `blind init`, rafraîchi tous les jours) : trouve les repos git sous tes `roots` et construit pour chacun un vocabulaire à partir de ce qui s'y trouve : le début du README, les noms de dossiers et de fichiers (`fct_orders.sql` donne `fct`, `orders`), les noms déclarés dans les petits fichiers YAML (modèles, sources et tables dbt, valeurs Helm...), `AGENTS.md`/`GEMINI.md`/`CLAUDE.md` et les fichiers de carte optionnels (`graphify-out/*.md`). Aucune liste de piles, de fichiers ou de mots n'est écrite dans `blind` : un repo de SQL seul, de notebooks ou de Terraform est décrit par ce qu'il contient. Le code n'est pas lu, seulement des noms et quelques petits fichiers proches de la racine.
+2. **Sélection**, en deux voies. Un repo nommé dans le prompt passe en tête (le nom le plus long gagne : « sales-api-java » n'ouvre pas aussi `sales-api`). Puis le reste du prompt, une fois mis de côté les mots du nom de ce repo, est comparé à tous les autres repos : « modifier le schéma OrderCreated de orders-app » ouvre aussi `schema-manager`. Sans repo nommé, c'est le meilleur score. Le score est de type TF-IDF sur des racines de mots (les cinq premières lettres : `orders`/`order`, `déploie`/`deploy` se rejoignent, dans toutes les langues). Un mot présent dans la moitié des repos ou plus (à partir de 6 repos) ne compte pas : il est déduit de tes repos, pas listé. Aucun score, aucun repo ouvert : la session reste aveugle. Quelques millisecondes pour des centaines de repos.
 3. **Repos liés** : voir ci-dessous.
 4. **MCP** : voir ci-dessous.
 5. **Workspace** : un dossier (droits `0700`) dans `~/.cache/blinders/sessions/` avec `AGENTS.md`, `CLAUDE.md` et `GEMINI.md` identiques (repos ouverts, repos liés fermés avec la raison, repos fermés, MCP non chargés, comment en ouvrir un). Supprimé après 7 jours.
@@ -103,11 +103,11 @@ Pour ouvrir un repo en cours de session : `/add-dir <chemin>` (Claude Code) ou `
 
 ### Repos liés
 
-À l'indexation, les fichiers de build et de déploiement (Helm, Kubernetes, Kustomize, Docker, CI, Terraform, `pom.xml`, `package.json`, `pyproject.toml`...) sont lus pour trouver les repos qui en citent un autre par son nom ou son nom d'artefact. S'y ajoutent les noms proches (`sales-api` / `sales-api-java`) et des groupes déclarés dans `config.toml`.
+À l'indexation, `blind` lit un peu de texte (jusqu'à 3 niveaux de dossiers, les fichiers les plus proches de la racine d'abord, 150 fichiers de 64 Ko au plus, sans les binaires) pour trouver les repos qui en citent un autre par son nom. Un repo est connu par le nom de son dossier et par le nom qu'il se donne dans un fichier de sa racine (`name = "x"`, `"name": "x"`, `<artifactId>x</artifactId>`). Aucune liste de noms de fichiers n'est nécessaire : un Helm, un pom, un `.cfg` maison sont lus de la même façon. S'y ajoutent les noms proches (`sales-api` / `sales-api-java`) et des groupes déclarés dans `config.toml`. Un repo cité par presque tous les autres pèse moins (fréquence inverse), un nom ambigu (même nom dans deux repos) est ignoré.
 
 À la sélection, les voisins des repos choisis sont :
 
-- **ouverts** si leur rôle (`deploy`, `data`) correspond à l'intention du prompt (« déploie », `helm`, `kubernetes` ; « lineage », `dbt`, `bigquery`...), dans la limite de `max_related_open` ;
+- **ouverts** si le reste du prompt (sans les mots du nom du repo choisi) correspond aussi à leur contenu, dans la limite de `max_related_open` ;
 - **listés dans l'index** avec la raison sinon, pour quelques dizaines de tokens : « platform-k8s : it references sales-api-java in its build/deploy files ».
 
 `--related all` ouvre les voisins les plus liés dans tous les cas, `--related none` ignore les relations.
@@ -153,17 +153,17 @@ Ton vrai `~/.gemini` n'est jamais modifié. Essai de bout en bout avec le vrai G
 
 `blind doctor` liste ce que ton `~/.gemini` ferait charger (global, extensions, `includeDirectories`) avec une estimation en tokens, pour voir d'où vient le poids. `--extensions auto|all|none|a,b` règle les extensions, `--no-isolate` (ou `[gemini] isolate_home = false`) rend à Gemini ton home complet. Si `settings.json` n'est pas lisible, `blind` ne filtre rien et le dit. Les commandes slash d'une extension non gardée n'existent pas dans la session.
 
-### Modèle selon la question
+### Choix du modèle
 
-`blind` classe le prompt en local (sans token) : `light` pour une question courte (point d'interrogation, « où », « quel », « explique », « tu peux me dire »...) sur au plus deux repos, sans verbe de modification ni de conception ; `strong` quand plusieurs signaux de conception ou de diagnostic s'accumulent (`refactor`, `architecture`, `cause racine`, `bout en bout`... plus plusieurs repos ouverts) ; sinon `standard`, qui ne passe rien et laisse la CLI choisir.
+`blind` ne devine pas le modèle d'après les mots du prompt : cela demanderait des listes de mots qui ne valent que pour une langue et une façon de travailler (et un modèle « léger » choisi automatiquement a donné une réponse moins détaillée avec plus de requêtes dans une comparaison réelle : 9 contre 6, 247 k contre 166 k tokens d'entrée). Le modèle est ce que tu fixes :
 
-Les noms viennent de `[models.<cli>]`. Seul `strong` a une valeur par défaut (l'alias `pro` pour Gemini, `opus` pour Claude : Gemini résout `pro` vers le meilleur modèle Pro que ton compte peut utiliser). **Il n'y a pas de modèle `light` par défaut** : dans une comparaison réelle, `gemini-3.1-flash-lite` a donné une réponse moins détaillée, avec plus de requêtes (9 contre 6) et plus de tokens d'entrée (247 k contre 166 k) que `gemini-3.8-flash` sur la même demande. Si tu veux quand même un modèle léger : `[models.gemini] light = "<id>"`.
+- `blind gemini --model <id>` pour un lancement (`--model default` laisse la CLI faire) ;
+- le sélecteur `model:` du lanceur plein écran ;
+- `[models.gemini] default = "<id>"` dans la config, pour tous les lancements (un `-m` après `--` l'emporte toujours).
 
-`blind models` liste ce que ta CLI propose vraiment : ton modèle par défaut dans `settings.json`, les modèles qui ont répondu dans tes derniers chats (`~/.gemini/tmp/*/chats`), les alias (`auto`, `pro`, `flash`, `flash-lite`) et tous les identifiants que ta version de Gemini CLI connaît (lus dans le paquet installé : `gemini-2.5-pro`, `gemini-3.8-flash`...). Ton accès réel dépend de ton compte Google, que `blind` ne peut pas interroger : la liste montre ce que la CLI connaît, pas ce que Google t'autorise. Le sélecteur `model:` du lanceur plein écran affiche la même liste et passe `-m <id>` pour ce lancement.
+`blind models` liste ce que ta CLI propose vraiment : ton modèle par défaut dans `settings.json`, les modèles qui ont répondu dans tes derniers chats (`~/.gemini/tmp/*/chats`), les alias (`auto`, `pro`, `flash`, `flash-lite`) et tous les identifiants que ta version de Gemini CLI connaît (lus dans le paquet installé : `gemini-2.5-pro`, `gemini-3.8-flash`...). Ton accès réel dépend de ton compte Google, que `blind` ne peut pas interroger : la liste montre ce que la CLI connaît, pas ce que Google t'autorise.
 
-**Routeur automatique de Gemini.** Si ton `settings.json` met `model.name` sur `auto` (ou rien), Gemini lance son propre routeur avant de répondre : dans l'une de tes sessions, un appel `utility_router` de 14 641 tokens d'entrée. Un modèle concret passé avec `-m` le contourne (« Routing bypassed by forced model directive », vérifié avec Gemini 0.63). `[models.gemini] standard = "<id>"` impose un modèle aux demandes ordinaires.
-
-`blind models` affiche aussi les niveaux utilisés par `--model auto`. `blind model "ton prompt" [-r repo]` affiche le niveau choisi, la raison (par exemple `asks for work (ajoute); not phrased as a question`) et le drapeau exact. `--model default` laisse la CLI faire, `--model light|standard|strong|<id>` force, un `-m` après `--` l'emporte, `[models] auto = false` désactive le choix automatique.
+**Routeur automatique de Gemini.** Si ton `settings.json` met `model.name` sur `auto` (ou rien), Gemini lance son propre routeur avant de répondre : dans l'une de tes sessions, un appel `utility_router` de 14 641 tokens d'entrée. Un modèle concret passé avec `-m` le contourne (« Routing bypassed by forced model directive », vérifié avec Gemini 0.63).
 
 ### Sorties d'outils et RTK
 
@@ -175,7 +175,9 @@ Le contexte grossit surtout avec ce que les outils renvoient (un `git diff`, une
 ### Deux niveaux : repo, puis fichiers
 
 1. **Repo** : quels repos ouvrir (voir plus haut).
-2. **Dans le repo** : pour chaque repo ouvert qui a un graphe Graphify, `blind` lit `graphify-out/graph.json` en local (quelques ms, aucun modèle) et note dans l'index quelques fichiers et symboles proches du prompt, plus les fichiers reliés dans le graphe :
+2. **Dans le repo** : pour chaque repo ouvert, `blind` note dans l'index quelques fichiers de départ proches du prompt, en local et sans modèle. Deux sources, un seul calcul :
+   - le graphe Graphify (`graphify-out/graph.json`) quand il existe : symboles, fichiers où ils vivent, fichiers reliés ;
+   - sinon, les noms de fichiers du repo et les noms déclarés dans ses YAML : c'est ce qui sert aux repos que le graphe ne sait pas lire (SQL seul, dbt, notebooks).
 
 ```
 - sales-api-java: /home/toi/work/sales-api-java
@@ -184,7 +186,7 @@ Le contexte grossit surtout avec ce que les outils renvoient (un `git diff`, une
   - connected to those: src/main/java/.../CheckoutService.java
 ```
 
-Ce sont des points de départ, pas des réponses : 3 à 4 fichiers au plus, jamais de contenu. Les noms des symboles comptent plus que les docstrings, les tests passent après le code sauf si le prompt parle de tests. Pas de pistes si rien ne correspond. `--no-hints` les désactive. La recherche est lexicale (noms de symboles et de fichiers), pas sémantique.
+Sans graphe, l'en-tête devient `Starting points from file names` et il n'y a pas de symboles. Ce sont des points de départ, pas des réponses : 3 à 4 fichiers au plus, jamais de contenu. Les noms de symboles comptent plus que les docstrings ; les fichiers de test ne sont pas traités à part. Le seuil s'adapte à la taille du repo. Pas de pistes si rien ne correspond. `--no-hints` les désactive. La recherche est lexicale, pas sémantique.
 
 ### Mise à jour avant lecture
 
@@ -242,12 +244,8 @@ always = ["commit"]        # toujours visibles
 [skills.keywords]
 slides-builder = ["keynote"]
 
-[models]
-auto = true                # false: ne jamais passer de modèle
 [models.gemini]            # `blind models` liste les identifiants
-strong = "pro"             # défaut
-# light = "<id>"           # aucun par défaut
-# standard = "<id>"        # impose un modèle (évite le routeur auto de Gemini)
+# default = "<id>"         # modèle de tous les lancements (évite le routeur auto de Gemini)
 
 [gemini]
 trust_workspace = true     # GEMINI_CLI_TRUST_WORKSPACE=true pour le workspace aveugle
@@ -278,7 +276,8 @@ dir_style = "link"         # repeat | comma | link
 - L'aveuglement vient de la construction (la CLI démarre dans un dossier sans code), pas d'un blocage : si tu ajoutes un repo ou si l'agent lit `~`, il le voit.
 - Les fichiers de contexte d'un repo ajouté par `--add-dir` ne sont pas forcément chargés par la CLI. Pour garder ses skills, MCP projet et `CLAUDE.md`, utilise `--primary` (démarre dans le premier repo, sans index).
 - La sélection est lexicale, pas sémantique : un prompt sans mot commun avec un repo ne l'ouvrira pas. Nomme le repo, déclare un groupe ou ajoute un fichier de carte (`.blinders/*.md`).
-- Les relations viennent de noms cités dans les fichiers de build et de déploiement ; un nom ambigu (même artefact dans deux repos) est ignoré.
+- Les relations viennent de noms cités dans de petits fichiers proches de la racine (3 niveaux) : une référence enfouie dans du code profond n'est pas vue. Un nom ambigu (même nom dans deux repos) est ignoré, et un nom de moins de 5 caractères n'est jamais utilisé.
+- Ouvrir un repo lié sans que le prompt en parle (le Kubernetes d'un ticket de schéma) n'est pas automatique : il est listé avec sa raison, à cocher à l'étape 3. L'historique git (repos touchés ensemble par un même ticket) est la suite prévue.
 - **Graphify** : `GRAPH_REPORT.md` n'est écrit que par `cluster-only` (l'ancienne version de `blind graph` ne le lançait pas : relance `blind sync` ou `blind graph --all --update`). Format de `graph.json` observé sur Graphify 0.9.80 ; une autre version peut changer les champs lus (`label`, `source_file`, `source_location`, `file_type`, `links`).
 - Les pistes dépendent de la qualité du graphe et des mots du prompt ; un mauvais indice est possible, d'où le libellé « hints ». Non mesuré : c'est ce que `blind stats` doit établir sur tes repos.
 - **Prompts très longs** : un argument de ligne de commande est limité à environ 128 Ko sous Linux. Au-delà de 100 Ko, `blind` écrit le prompt dans `PROMPT.md` du workspace et demande à la CLI de le lire. Un collage multi-ligne dépend du « bracketed paste » du terminal : sans lui, chaque retour à la ligne collé serait vu comme une touche Entrée.
@@ -286,7 +285,7 @@ dir_style = "link"         # repeat | comma | link
 - Les filtres MCP et skills ne couvrent que le niveau utilisateur, pas les plugins ni les extensions.
 - **Filtre de skills non testé en session réelle.** Pour Claude Code, `skillOverrides` vient de la documentation et du suivi d'issues (le réglage est peu documenté, et des issues signalent que `off` n'empêche pas l'appel explicite d'un skill). Pour Gemini, les clés `skills.disabled` et `context.memoryBoundaryMarkers` existent bien dans le code de la version 0.63 (relu dans le paquet npm), mais leur effet dans une vraie session n'a pas été observé, et Gemini n'applique les réglages d'un workspace que dans un dossier de confiance (d'où `GEMINI_CLI_TRUST_WORKSPACE`, qui approuve le dossier de travail de la session, c'est-à-dire le workspace aveugle).
 - **RTK** : le hook et la réécriture `git status` → `rtk git status` ont été vérifiés (Gemini 0.63 enregistre bien le hook de la session, et le hook renvoie la commande réécrite), mais pas dans une session avec un vrai appel de modèle. RTK condense avec perte : si une sortie semble incomplète, `rtk proxy <commande>` donne la sortie brute. Les gains en caractères ci-dessus sont sur ce dépôt, pas sur les tiens.
-- **Choix du modèle** : heuristique sur des mots-clés, pas une mesure. Un `light` mal choisi donne une réponse plus faible, un `strong` coûte plus cher. Les alias `pro`/`opus` viennent de la documentation et du code des CLI ; `-m` est confirmé par le journal de Gemini, pas la qualité des réponses. Corrige avec `[models.<cli>]` ou `--model default`. Vérifie avec `blind gemini --dry-run` puis dans la session (`/skills`).
+- **Modèle** : les alias `pro`/`opus` viennent de la documentation et du code des CLI ; `-m` est confirmé par le journal de Gemini, pas la qualité des réponses. Vérifie avec `blind gemini --dry-run`.
 - `blind audit` estime en caractères / 4, pas avec un vrai tokenizer, et ne mesure pas la taille des schémas d'outils MCP (seulement leur nombre).
 
 ## Site

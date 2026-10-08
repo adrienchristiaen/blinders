@@ -8,13 +8,10 @@ from dataclasses import dataclass
 
 from .config import Config
 from .scan import Repo
-from .text import squash, stem, stems, words
+from .text import squash, stem, stems, ubiquitous, words
 
 NAME_BONUS = 1000.0
-# A word found in at least this share of the repos (once there are enough of them to tell) describes
-# none of them: it is learned from the user's own repos instead of listed by hand.
-UBIQUITOUS_SHARE = 0.5
-MIN_REPOS_FOR_UBIQUITY = 6
+MIN_REPOS_FOR_UBIQUITY = 6   # below this, "found in most repos" says nothing
 
 
 @dataclass
@@ -75,8 +72,7 @@ def rank(prompt: str, repos: list[Repo], ignore: set[str] | None = None) -> list
     for terms in vocab.values():
         for term in terms:
             df[term] = df.get(term, 0) + 1
-    if len(repos) >= MIN_REPOS_FOR_UBIQUITY:
-        q_set = {t for t in q_set if df.get(t, 0) < n * UBIQUITOUS_SHARE}
+    q_set -= ubiquitous(vocab.values(), MIN_REPOS_FOR_UBIQUITY)
 
     ranked: list[Choice] = []
     for repo in repos:
@@ -96,14 +92,27 @@ def rank(prompt: str, repos: list[Repo], ignore: set[str] | None = None) -> list
     return ranked
 
 
-def select(prompt: str, repos: list[Repo], cfg: Config, ranked: list[Choice] | None = None) -> list[Choice]:
-    """Return the seed repos (named or best content match), best first. Empty: stay fully blind."""
-    ranked = ranked if ranked is not None else rank(prompt, repos)
+def _keep_relative(ranked: list[Choice], cfg: Config) -> list[Choice]:
     if not ranked or ranked[0].score <= 0:
         return []
     top = ranked[0].score
-    chosen = [c for c in ranked if c.score > 0 and c.score >= top * cfg.relative_threshold]
-    return chosen[: cfg.max_repos]
+    return [c for c in ranked if c.score > 0 and c.score >= top * cfg.relative_threshold]
+
+
+def select(prompt: str, repos: list[Repo], cfg: Config, ranked: list[Choice] | None = None) -> list[Choice]:
+    """Return the seed repos, best first. Empty: stay fully blind.
+
+    Two lanes. Repos named in the prompt always come first. Then the rest of the prompt (what is left once
+    the named repos' own names are set aside) is matched against every other repo, so a request that names
+    the application but talks about a schema also finds the schema repo."""
+    ranked = ranked if ranked is not None else rank(prompt, repos)
+    named = [c for c in ranked if c.score >= NAME_BONUS]
+    if not named:
+        return _keep_relative(ranked, cfg)[: cfg.max_repos]
+    taken = {c.repo.path for c in named}
+    leftover = {s for c in named for s in stems(c.repo.name)}
+    companions = [c for c in rank(prompt, repos, ignore=leftover) if c.repo.path not in taken]
+    return (named + _keep_relative(companions, cfg))[: cfg.max_repos]
 
 
 # --- related repos ---------------------------------------------------------------------------

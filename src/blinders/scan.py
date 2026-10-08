@@ -9,14 +9,13 @@ from __future__ import annotations
 import glob
 import json
 import os
-import re
 import time
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .config import Config, cache_dir
-from .files import SKIP_DIRS, iter_files
+from .files import SKIP_DIRS, YAML_SUFFIXES, declared_names, iter_files
 from .relations import collect_ref_text, compute_links, identities
 from .text import tokens
 
@@ -59,8 +58,6 @@ def _first_paragraph(readme: str) -> str:
 MAX_PATH_FILES = 4000
 MAX_PATH_DEPTH = 8
 MAX_PATH_TERMS = 300
-YAML_NAME = re.compile(r"^\s*-?\s*name:\s*['\"]?([A-Za-z0-9_.\-]+)", re.M)
-YAML_SUFFIXES = (".yml", ".yaml")
 MAX_YAML_FILES = 40
 
 
@@ -83,7 +80,7 @@ def path_terms(path: Path) -> Counter[str]:
         if file.name.endswith(YAML_SUFFIXES) and len(yamls) < MAX_YAML_FILES:
             yamls.append(file)
     for f in yamls:
-        for declared in YAML_NAME.findall(_read_head(f, 4096)):
+        for declared in declared_names(f):
             counts.update(tokens(declared))
     return counts
 

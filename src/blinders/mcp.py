@@ -13,15 +13,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import Config
-from .text import tokens
+from .text import tokens, ubiquitous
 
-# Words that appear in many launch commands and say nothing about what a server does.
-NOISE = frozenset(
-    """
-    npx uvx node python python3 docker start server stdio http https mcp latest args command
-    bin usr local com org www run exec serve sse
-    """.split()
-)
+MIN_SERVERS_FOR_UBIQUITY = 3   # below this, "found in most servers" says nothing
 
 
 @dataclass
@@ -51,7 +45,7 @@ def _terms(name: str, conf: dict, extra: list[str]) -> set[str]:
              str(conf.get("httpUrl", "")), str(conf.get("description", ""))]
     parts += [str(a) for a in conf.get("args", []) if isinstance(a, str)]
     parts += extra
-    return {t for t in tokens(" ".join(parts)) if t not in NOISE}
+    return set(tokens(" ".join(parts)))
 
 
 def discover(style: str, home: Path, cfg: Config) -> list[McpServer]:
@@ -82,7 +76,8 @@ def select_mcp(prompt: str, servers: list[McpServer], cfg: Config, spec: str = "
         wanted = {n.strip() for n in spec.split(",") if n.strip()}
         kept = [s for s in servers if s.name in wanted or s.name in cfg.mcp_always]
         return McpPlan(kept, [s for s in servers if s not in kept], {s.name: "requested" for s in kept})
-    q = set(tokens(prompt))
+    # Launcher plumbing (npx, uvx, docker, mcp...) is what most of YOUR servers share: learned, not listed.
+    q = set(tokens(prompt)) - ubiquitous((s.terms for s in servers), MIN_SERVERS_FOR_UBIQUITY)
     kept = []
     for s in servers:
         if s.name in cfg.mcp_always:

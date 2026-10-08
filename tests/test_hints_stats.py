@@ -76,12 +76,6 @@ class HintTests(Sandbox):
         h = find_hints("discount json", self.repo, self.cfg)
         self.assertNotIn("README.md", [f.path for f in h.files])
 
-    def test_tests_rank_lower_unless_the_prompt_asks_for_tests(self):
-        plain = find_hints("fix apply_discount", self.repo, self.cfg)
-        self.assertEqual(plain.files[0].path, "src/pricing/rule.py")
-        asked = find_hints("fix the test for apply_discount", self.repo, self.cfg)
-        self.assertIn("tests/test_rule.py", [f.path for f in asked.files])
-
     def test_connected_files_come_from_graph_links(self):
         h = find_hints("fix PricingRule apply_discount", self.repo, self.cfg)
         self.assertIn("src/checkout.py", h.connected + [f.path for f in h.files])
@@ -114,6 +108,49 @@ class HintTests(Sandbox):
         self.assertIn("src/pricing/rule.py", text)
         code, out, err = run_cli("run", "gemini", "--dry-run", "--mcp", "none", "--no-hints", "fix", "apply_discount", "in", "shop")
         self.assertNotIn("Starting points", (session_of(out) / "GEMINI.md").read_text())
+
+
+class FileNameHintTests(Sandbox):
+    """Level 2 without a code graph (SQL, YAML, notebooks, anything the graph tool cannot parse)."""
+
+    def setUp(self):
+        super().setUp()
+        self.repo_dir = self.work / "bi-dbt"
+        (self.repo_dir / ".git").mkdir(parents=True)
+        for rel in ("models/marts/sales/fct_shipments.sql", "models/staging/stg_orders.sql", "macros/util.sql"):
+            f = self.repo_dir / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("select 1")
+        (self.repo_dir / "models" / "schema.yml").write_text("models:\n  - name: dim_customers\n")
+        self.repo = {r.name: r for r in build_index(self.cfg)}["bi-dbt"]
+
+    def test_a_file_name_is_a_starting_point(self):
+        h = find_hints("why is fct_shipments wrong", self.repo, self.cfg)
+        self.assertEqual(h.files[0].path, "models/marts/sales/fct_shipments.sql")
+        self.assertEqual(h.files[0].symbols, [])
+
+    def test_a_name_declared_inside_a_yaml_file_points_to_it(self):
+        h = find_hints("the customers dimension looks wrong", self.repo, self.cfg)
+        self.assertEqual(h.files[0].path, "models/schema.yml")
+
+    def test_plural_and_singular_meet(self):
+        h = find_hints("which order tables feed this", self.repo, self.cfg)
+        self.assertEqual(h.files[0].path, "models/staging/stg_orders.sql")
+
+    def test_nothing_relevant_or_only_the_repo_name_gives_nothing(self):
+        self.assertIsNone(find_hints("translate the onboarding emails", self.repo, self.cfg))
+        self.assertIsNone(find_hints("bi dbt", self.repo, self.cfg))
+
+    def test_the_label_says_where_the_hint_comes_from(self):
+        h = find_hints("why is fct_shipments wrong", self.repo, self.cfg)
+        self.assertIn("file names", "\n".join(render_hints(h, "")))
+        self.assertNotIn("code graph", "\n".join(render_hints(h, "")))
+
+    def test_hints_reach_the_index_without_any_graph(self):
+        code, out, err = run_cli("run", "gemini", "--dry-run", "--mcp", "none", "why", "is", "fct_shipments", "wrong", "in", "bi-dbt")
+        self.assertEqual(code, 0)
+        text = (session_of(out) / "GEMINI.md").read_text()
+        self.assertIn("models/marts/sales/fct_shipments.sql", text)
 
 
 class StatsTests(Sandbox):

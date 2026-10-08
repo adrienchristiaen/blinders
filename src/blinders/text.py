@@ -18,6 +18,7 @@ STOPWORDS = frozenset(
     """.split()
 )
 STEM_LENGTH = 5
+UBIQUITOUS_SHARE = 0.5
 
 
 def _fold(text: str) -> str:
@@ -63,3 +64,17 @@ def stem(token: str) -> str:
 
 def stems(text: str) -> list[str]:
     return [stem(t) for t in tokens(text)]
+
+
+def ubiquitous(term_sets, min_items: int, share: float = UBIQUITOUS_SHARE) -> set[str]:
+    """Terms found in at least ``share`` of the items. They describe none of them in particular, and they
+    are learned from the user's own data, so no hand-made stop-list is needed. Empty when there are too few
+    items to tell."""
+    sets = [set(s) for s in term_sets]
+    if len(sets) < min_items:
+        return set()
+    counts: dict[str, int] = {}
+    for s in sets:
+        for term in s:
+            counts[term] = counts.get(term, 0) + 1
+    return {term for term, n in counts.items() if n >= len(sets) * share}

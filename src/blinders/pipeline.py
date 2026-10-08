@@ -150,12 +150,10 @@ def run_map(cfg: Config, repos: list[Repo], prompt: str, emit: Emit) -> dict[str
     if not repos:
         emit(Event(4, "done", "nothing opened: fully blind session", level="ok"))
         return out
-    emit(Event(4, "start", f"reading the graph of {total} repo(s)", 0, total))
+    emit(Event(4, "start", f"looking for starting points in {total} repo(s)", 0, total))
     for i, repo in enumerate(repos, 1):
-        if not repo.graph_report:
-            emit(Event(4, "line", f"{repo.name}: no graph, no starting points", i, total, "warn"))
-        elif not cfg.hints_enabled or not prompt:
-            emit(Event(4, "line", f"{repo.name}: graph ready", i, total, "info"))
+        if not cfg.hints_enabled or not prompt:
+            emit(Event(4, "line", f"{repo.name}: " + ("graph ready" if repo.graph_report else "no graph (file names only)"), i, total, "info"))
         else:
             h = find_hints(prompt, repo, cfg)
             if h:
@@ -163,7 +161,7 @@ def run_map(cfg: Config, repos: list[Repo], prompt: str, emit: Emit) -> dict[str
                 files = ", ".join(f.path for f in h.files[:3])
                 emit(Event(4, "line", f"{repo.name}: {len(h.files)} starting point(s): {files}", i, total, "ok"))
             else:
-                emit(Event(4, "line", f"{repo.name}: graph ready, nothing specific to point at", i, total, "info"))
+                emit(Event(4, "line", f"{repo.name}: " + ("" if repo.graph_report else "no graph, ") + "nothing specific to point at", i, total, "info"))
         emit(Event(4, "progress", repo.name, i, total))
     emit(Event(4, "done", f"{sum(len(h.files) for h in out.values())} starting point(s) in {len(out)} of {total} repo(s)", total, total, "ok"))
     return out
