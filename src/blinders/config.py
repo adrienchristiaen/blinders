@@ -62,6 +62,9 @@ class Config:
     graph_workers: int = 2         # graphs built in parallel in step 2
     hints_enabled: bool = True
     hints_max_files: int = 4
+    # exact identifiers of the prompt searched in every repo (no tokens)
+    grep_enabled: bool = True
+    grep_max_literals: int = 8
     # interactive entry point
     default_cli: str = ""          # used by a bare `blind`; empty = ask or autodetect
     models: dict[str, dict[str, str]] = field(default_factory=dict)  # per CLI: {"default": "<model>"}
@@ -129,6 +132,9 @@ def load_config(path: Path | None = None) -> Config:
     cfg.gemini_extensions_always = list(gem.get("extensions_always", cfg.gemini_extensions_always))
     cfg.gemini_tool_output_chars = int(gem.get("tool_output_chars", cfg.gemini_tool_output_chars))
     cfg.gemini_rtk = bool(gem.get("rtk", cfg.gemini_rtk))
+    grep = data.get("grep", {})
+    cfg.grep_enabled = bool(grep.get("enabled", cfg.grep_enabled))
+    cfg.grep_max_literals = int(grep.get("max_literals", cfg.grep_max_literals))
     skills = data.get("skills", {})
     cfg.skills_always = list(skills.get("always", []))
     cfg.skills_keywords = {k: list(v) for k, v in skills.get("keywords", {}).items()}

@@ -8,10 +8,10 @@ from dataclasses import dataclass
 
 from .config import Config
 from .scan import Repo
-from .text import squash, stem, stems, ubiquitous, words
+from .grep import find_hits
+from .text import MIN_REPOS_FOR_UBIQUITY, squash, stem, stems, ubiquitous, words
 
 NAME_BONUS = 1000.0
-MIN_REPOS_FOR_UBIQUITY = 6   # below this, "found in most repos" says nothing
 
 
 @dataclass
@@ -115,6 +115,20 @@ def select(prompt: str, repos: list[Repo], cfg: Config, ranked: list[Choice] | N
     return (named + _keep_relative(companions, cfg))[: cfg.max_repos]
 
 
+def with_hits(seeds: list[Choice], hits: dict[str, list[str]], repos: list[Repo], cfg: Config) -> list[Choice]:
+    """Named repos first, then repos that contain the prompt's exact identifiers (most identifiers first),
+    then the rest of the seeds."""
+    if not hits:
+        return seeds
+    by_path = {r.path: r for r in repos}
+    named = [c for c in seeds if c.score >= NAME_BONUS]
+    taken = {c.repo.path for c in named}
+    found = sorted((p for p in hits if p in by_path and p not in taken), key=lambda p: (-len(hits[p]), by_path[p].name))
+    contains = [Choice(by_path[p], float(len(hits[p])), "contains " + ", ".join(hits[p])) for p in found]
+    rest = [c for c in seeds if c.score < NAME_BONUS and c.repo.path not in set(found)]
+    return (named + contains + rest)[: cfg.max_repos]
+
+
 # --- related repos ---------------------------------------------------------------------------
 
 @dataclass
@@ -184,7 +198,7 @@ def plan(
     if forced is not None:
         seeds = [Choice(r, NAME_BONUS, "requested") for r in forced]
     else:
-        seeds = select(prompt, repos, cfg)
+        seeds = with_hits(select(prompt, repos, cfg), find_hits(prompt, repos, cfg), repos, cfg)
     if not seeds or related == "none":
         return Plan(seeds, [])
     seed_names = {s for seed in seeds for s in stems(seed.repo.name)}

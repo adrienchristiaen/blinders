@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.0
+- **Exact identifiers are searched in every repo.** Words of the prompt that look like identifiers (`snake_case`, `camelCase`, letters mixed with digits, or anything in quotes or backticks) are looked up with `rg` (a bounded Python walk if `rg` is missing). Repos that contain them open right after the repos named in the prompt, within `max_repos`. Only repo names come back; nothing is sent to a model. An identifier found in half your repos or more is ignored, and repo names are not searched. This is how a schema change finds the deploy repo and the batch job nobody named.
+- `[grep] enabled = false` turns it off; `max_literals` (default 8) caps the identifiers searched.
+
 ## 0.11.1
 - The launcher shows a pill per helper on the right of the prompt: **green** = found and used in this launch, **amber** = found but not used now (rtk with Claude Code, or switched off in the config), **red** = not found. Hover a pill for the reason and the install command. The text-mode launch line ends with the same states (`graphify on, rtk missing`).
 

@@ -19,6 +19,7 @@ STOPWORDS = frozenset(
 )
 STEM_LENGTH = 5
 UBIQUITOUS_SHARE = 0.5
+MIN_REPOS_FOR_UBIQUITY = 6   # below this many repos, "found in most of them" says nothing
 
 
 def _fold(text: str) -> str:
