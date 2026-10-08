@@ -169,6 +169,118 @@ class LaunchIntegrationTests(HomeSandbox):
         self.assertEqual(len(list((home / ".gemini" / "extensions").iterdir())), 2)
 
 
+class ToolOutputTests(HomeSandbox):
+    def build(self):
+        session = self.tmp / "session"
+        session.mkdir(exist_ok=True)
+        home = geminihome.build_home(session, self.home, self.cfg)
+        return json.loads((home / ".gemini" / "settings.json").read_text())
+
+    def test_large_tool_outputs_are_cut_by_default(self):
+        self.assertEqual(self.build()["tools"]["truncateToolOutputThreshold"], 12000)
+
+    def test_a_threshold_you_set_yourself_wins_and_zero_disables(self):
+        (self.gem / "settings.json").write_text(json.dumps({"tools": {"truncateToolOutputThreshold": 5000}}))
+        self.assertEqual(self.build()["tools"]["truncateToolOutputThreshold"], 5000)
+        (self.gem / "settings.json").write_text("{}")
+        self.cfg.gemini_tool_output_chars = 0
+        self.assertNotIn("tools", self.build())
+
+
+class RtkTests(HomeSandbox):
+    def build(self, rtk="/opt/bin/rtk"):
+        session = self.tmp / "session"
+        session.mkdir(exist_ok=True)
+        home = geminihome.build_home(session, self.home, self.cfg, rtk=rtk)
+        return home, json.loads((home / ".gemini" / "settings.json").read_text())
+
+    def test_the_session_gets_rtk_s_before_tool_hook(self):
+        home, conf = self.build()
+        hook = conf["hooks"]["BeforeTool"][0]
+        self.assertEqual(hook["matcher"], "run_shell_command")
+        wrapper = Path(hook["hooks"][0]["command"])
+        self.assertEqual(wrapper, home / "rtk-hook-gemini.sh")
+        self.assertEqual(wrapper.read_text(), "#!/bin/bash\nexec /opt/bin/rtk hook gemini\n")
+        self.assertTrue(os.access(wrapper, os.X_OK))
+        # the real settings are untouched
+        self.assertNotIn("hooks", json.loads((self.gem / "settings.json").read_text()))
+
+    def test_other_hooks_are_kept_and_an_existing_rtk_hook_is_not_doubled(self):
+        other = {"matcher": "write_file", "hooks": [{"type": "command", "command": "/x/audit.sh"}]}
+        (self.gem / "settings.json").write_text(json.dumps({"hooks": {"BeforeTool": [other]}}))
+        _, conf = self.build()
+        self.assertEqual(len(conf["hooks"]["BeforeTool"]), 2)
+        mine = {"matcher": "run_shell_command", "hooks": [{"type": "command", "command": "/h/rtk-hook-gemini.sh"}]}
+        (self.gem / "settings.json").write_text(json.dumps({"hooks": {"BeforeTool": [mine]}}))
+        _, conf = self.build()
+        self.assertEqual(len(conf["hooks"]["BeforeTool"]), 1)
+
+    def test_without_rtk_no_hook(self):
+        _, conf = self.build(rtk=None)
+        self.assertNotIn("hooks", conf)
+
+
+class RtkLaunchTests(HomeSandbox):
+    def setUp(self):
+        super().setUp()
+        self.sales_repos()
+        d = Path(os.environ["BLINDERS_CONFIG_DIR"])
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "config.toml").write_text(f'roots = ["{self.work}"]\n')
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        fake = self.bin / "rtk"
+        fake.write_text("#!/bin/sh\nexit 0\n")
+        fake.chmod(0o755)
+
+    def test_rtk_on_path_adds_the_hook_and_a_note_for_the_agent(self):
+        os.environ["PATH"] = f"{self.bin}{os.pathsep}{os.environ['PATH']}"
+        _, out, _ = run_cli("run", "gemini", "--dry-run", "hello")
+        session = session_of(out)
+        conf = json.loads((session / "gemini-home" / ".gemini" / "settings.json").read_text())
+        self.assertIn("BeforeTool", conf["hooks"])
+        self.assertIn("rtk proxy", (session / "GEMINI.md").read_text())
+
+    def test_no_rtk_or_switched_off_means_nothing(self):
+        _, out, _ = run_cli("run", "gemini", "--dry-run", "hello")
+        conf = json.loads((session_of(out) / "gemini-home" / ".gemini" / "settings.json").read_text())
+        self.assertNotIn("hooks", conf)
+        os.environ["PATH"] = f"{self.bin}{os.pathsep}{os.environ['PATH']}"
+        d = Path(os.environ["BLINDERS_CONFIG_DIR"])
+        (d / "config.toml").write_text(f'roots = ["{self.work}"]\n[gemini]\nrtk = false\n')
+        _, out, _ = run_cli("run", "gemini", "--dry-run", "hello")
+        session = session_of(out)
+        self.assertNotIn("hooks", json.loads((session / "gemini-home" / ".gemini" / "settings.json").read_text()))
+        self.assertNotIn("rtk proxy", (session / "GEMINI.md").read_text())
+
+
+class ModelCommandTests(HomeSandbox):
+    def setUp(self):
+        super().setUp()
+        self.sales_repos()
+        d = Path(os.environ["BLINDERS_CONFIG_DIR"])
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "config.toml").write_text(f'roots = ["{self.work}"]\n')
+
+    def test_blind_model_explains_a_light_choice(self):
+        code, out, _ = run_cli("model", "où", "est", "la", "classe", "principale", "?", "-r", "sales-api-java")
+        self.assertEqual(code, 0)
+        self.assertIn("tier:   light", out)
+        self.assertIn("flag:   -m flash-lite", out)
+
+    def test_blind_model_explains_why_it_stayed_standard(self):
+        _, out, _ = run_cli("model", "ajoute", "un", "test", "-r", "sales-api-java")
+        self.assertIn("tier:   standard", out)
+        self.assertIn("asks for work (ajoute)", out)
+        self.assertIn("none (the CLI picks", out)
+
+    def test_a_configured_standard_model_is_always_passed(self):
+        d = Path(os.environ["BLINDERS_CONFIG_DIR"])
+        (d / "config.toml").write_text(f'roots = ["{self.work}"]\n[models.gemini]\nstandard = "flash"\n')
+        _, out, _ = run_cli("model", "ajoute", "un", "test", "-r", "sales-api-java")
+        self.assertIn("flag:   -m flash", out)
+
+
 class RouterTests(unittest.TestCase):
     def test_plain_questions_are_light_even_on_two_repos_or_with_a_noun_like_lineage(self):
         self.assertEqual(classify("tu peux me dire le lineage de sales-api-java", 2)[0], "light")

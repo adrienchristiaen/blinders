@@ -85,6 +85,22 @@ class UiTests(unittest.TestCase):
     def selected(self, app, key):
         return sorted(str(v) for v in app.query_one(f"#{key}", SelectionList).selected)
 
+    def test_model_selector_defaults_to_auto_and_is_returned(self):
+        async def go():
+            from textual.widgets import Select
+            app = self.app("alpha")
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.selecting(pilot)
+                self.assertEqual(app.query_one("#model", Select).value, "auto")
+                app.query_one("#model", Select).value = "light"
+                await pilot.pause(0.2)
+                self.assertEqual(app.model, "light")
+                self.assertEqual(app.cli, "gemini")   # the model selector must not be mistaken for the CLI one
+                await pilot.press("enter")
+                await self.until(pilot, lambda: not app.is_running, timeout=8)
+            self.assertEqual(app.return_value.model, "light")
+        run(go())
+
     def test_steps_one_and_two_run_by_themselves_then_selection_opens(self):
         async def go():
             app = self.app()

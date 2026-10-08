@@ -85,7 +85,16 @@ def classify(prompt: str, opened: int, related: int = 0) -> tuple[str, str]:
         return "strong", f"{why}; {opened} repo(s) opened"
     if question and not edits and len(prompt) <= SHORT_PROMPT and opened <= 2 and related <= 2:
         return "light", f"short question, {opened} repo(s)"
-    return "standard", "default"
+    blockers = []
+    if edits:
+        blockers.append(f"asks for work ({sorted(edits)[0]})")
+    if not question:
+        blockers.append("not phrased as a question")
+    if len(prompt) > SHORT_PROMPT:
+        blockers.append("long prompt")
+    if opened > 2 or related > 2:
+        blockers.append(f"{opened} repo(s) opened, {related} related")
+    return "standard", "; ".join(blockers) or "default"
 
 
 def choose_model(cli: str, prompt: str, opened: int, related: int, cfg: Config, spec: str | None = None) -> ModelChoice | None:

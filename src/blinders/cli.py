@@ -27,7 +27,7 @@ from .models import ModelChoice, choose_model
 from . import geminihome
 from .scan import Repo, build_index, load_index
 from .select import Plan, plan, rank
-from .workspace import create_session, prune_sessions
+from .workspace import CONTEXT_FILENAMES, create_session, prune_sessions
 
 
 def _version_text() -> str:
@@ -129,6 +129,10 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("note", nargs="*", metavar="note ID key=value",
                    help="attach numbers by hand, e.g. `blind stats note a1b2c3 first_turn_tokens=21000 input_tokens=90000 output_tokens=4000`")
 
+    m = sub.add_parser("model", help="show which model blind would pick for a prompt, and why")
+    m.add_argument("prompt", nargs="*")
+    m.add_argument("--cli", default="gemini")
+    m.add_argument("-r", "--repos", help="repo names to count as opened (default: what the prompt selects)")
     sub.add_parser("doctor", help="show which Python, UI, Graphify, git and CLIs blind can see")
 
     sub.add_parser("clean", help="remove all blind workspaces")
@@ -218,6 +222,7 @@ class LaunchPlan:
     skills_note: str = ""
     model: ModelChoice | None = None
     ext_plan: geminihome.ExtPlan | None = None
+    rtk: str = ""                               # rtk binary condensing shell output in this session
     isolate: bool = False                       # run Gemini with a per-session home
     env: dict[str, str] = field(default_factory=dict)
     home_note: str = ""
@@ -273,6 +278,8 @@ def make_plan(cfg: Config, adapter: Adapter, prompt: str, repos: list[Repo], opt
         lp.ext_plan = geminihome.select_extensions(
             prompt, geminihome.list_extensions(Path.home()), lp.skills_plan, lp.mcp_plan, cfg,
             getattr(opts, "extensions", None) or cfg.gemini_extensions)
+        if cfg.gemini_rtk:
+            lp.rtk = shutil.which("rtk") or ""
     if adapter.model_flag:
         lp.model = choose_model(adapter.name, prompt, len(opened), len(related), cfg, getattr(opts, "model", None))
     return lp
@@ -297,6 +304,8 @@ def describe_plan(lp: LaunchPlan) -> str:
     if lp.ext_plan is not None and (lp.ext_plan.kept or lp.ext_plan.dropped):
         lines.append(f"  extensions kept {names(e.name for e in lp.ext_plan.kept)}"
                      + (f"   (hidden {len(lp.ext_plan.dropped)})" if lp.ext_plan.dropped else ""))
+    if lp.isolate and lp.rtk:
+        lines.append("  shell output    condensed by rtk")
     if lp.model is not None:
         shown = lp.model.model or "CLI default"
         lines.append(f"  model           {shown} ({lp.model.tier}: {lp.model.reason})")
@@ -344,9 +353,14 @@ def materialize(cfg: Config, lp: LaunchPlan, dry_run: bool) -> tuple[str, list[s
             skills=lp.skills_plan.kept if lp.skills_plan is not None else None,
             extensions=lp.ext_plan.kept if lp.ext_plan is not None else None,
             kept_mcp={s.name for s in lp.mcp_plan.kept} if lp.mcp_plan is not None else None,
+            rtk=lp.rtk or None,
         )
         if home is not None:
             lp.env["GEMINI_CLI_HOME"] = str(home)
+            if lp.rtk and not geminihome.has_rtk_hook(geminihome.load_settings(Path.home() / ".gemini" / "settings.json") or {}):
+                for name in CONTEXT_FILENAMES:
+                    f = session / name
+                    f.write_text(f.read_text(encoding="utf-8") + geminihome.RTK_NOTE, encoding="utf-8")
         else:
             lp.home_note = "~/.gemini/settings.json is unreadable: your real Gemini home is used, nothing is filtered"
     if lp.primary:
@@ -750,6 +764,8 @@ def run_launcher(args, cfg: Config, repos: list[Repo], cli: str | None, extra: l
     chosen = set(res.repos)
     forced = [r for r in repos if r.name in chosen]
     args.mcp = args.skills = None
+    if res.model != "auto":
+        args.model = res.model   # chosen on the launcher screen; otherwise the --model flag (if any) stays
     if adapter.mcp_style != "none":
         names = [s.name for s in discover(adapter.mcp_style, Path.home(), cfg)]
         # Claude only filters when something is unticked: its strict mode also drops plugins and connectors.
@@ -975,6 +991,34 @@ def cmd_stats(args, cfg: Config) -> int:
     return 0
 
 
+def cmd_model(args, cfg: Config) -> int:
+    prompt = " ".join(args.prompt).strip()
+    try:
+        adapter = get_adapter(args.cli, cfg)
+    except (KeyError, ValueError) as exc:
+        return _err(str(exc))
+    if not adapter.model_flag:
+        return _err(f"{adapter.name} has no model flag in blind")
+    repos = load_index(cfg) or []
+    if args.repos:
+        forced, missing = _resolve_forced(args.repos, repos)
+        if missing:
+            return _err(f"unknown repo(s): {', '.join(missing)}")
+        opened, related = len(forced), 0
+    else:
+        seed = plan(prompt, repos, cfg) if prompt and repos else None
+        opened, related = (len(seed.opened), len(seed.related)) if seed else (0, 0)
+    choice = choose_model(adapter.name, prompt, opened, related, cfg)
+    print(f"prompt: {len(prompt)} characters; {opened} repo(s) opened, {related} related")
+    if choice is None:
+        print("model:  none passed (no prompt, [models] auto = false, or no name known for this tier)")
+        return 0
+    print(f"tier:   {choice.tier} ({choice.reason})")
+    print(f"flag:   {adapter.model_flag} {choice.model}" if choice.model else "flag:   none (the CLI picks its own model)")
+    print("force one with `--model light|standard|strong|<name>`, or in the launcher's model selector.")
+    return 0
+
+
 def cmd_doctor(args, cfg: Config) -> int:
     def row(label: str, value: str) -> None:
         print(f"{label:<22}{value}")
@@ -984,6 +1028,8 @@ def cmd_doctor(args, cfg: Config) -> int:
     row("full-screen launcher", "Textual found" if ui_available() else "Textual missing: pip install textual")
     row("git", shutil.which("git") or "not found")
     row("graphify", shutil.which(cfg.graphify_bin) or f"not found (uv tool install graphifyy)")
+    row("rtk (optional)", shutil.which("rtk") or "not found: condenses shell output for Gemini; "
+        "cargo install --git https://github.com/rtk-ai/rtk (the crate named rtk on crates.io is a different tool)")
     for name in sorted(_known_clis(cfg)):
         try:
             binary = get_adapter(name, cfg).binary
@@ -1044,7 +1090,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_start(args, cfg, extra, cli)
     args = _parser().parse_args(argv)
     handlers = {
-        "setup": cmd_setup, "doctor": cmd_doctor, "sync": cmd_sync, "status": cmd_status, "stats": cmd_stats, "init": cmd_init, "list": cmd_list, "select": cmd_select, "mcp": cmd_mcp,
+        "setup": cmd_setup, "doctor": cmd_doctor, "model": cmd_model, "sync": cmd_sync, "status": cmd_status, "stats": cmd_stats, "init": cmd_init, "list": cmd_list, "select": cmd_select, "mcp": cmd_mcp,
         "graph": cmd_graph, "audit": cmd_audit, "clean": cmd_clean,
     }
     return handlers[args.cmd](args, cfg)

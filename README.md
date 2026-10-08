@@ -155,6 +155,15 @@ Ton vrai `~/.gemini` n'est jamais modifié. Essai de bout en bout avec le vrai G
 
 `blind` choisit en local (sans token) un niveau de modèle d'après le prompt : `light` pour une question courte (point d'interrogation, « où », « quel », « explique », « tu peux me dire »...) sur au plus deux repos, sans verbe de modification ni verbe de conception (refactor, migrer, debug...) ; `strong` quand plusieurs signaux de conception ou de diagnostic s'accumulent (`refactor`, `architecture`, `cause racine`, `bout en bout`... plus plusieurs repos ouverts) ; sinon `standard`, qui ne passe rien et laisse la CLI choisir. Les noms viennent de `[models.<cli>]`, par défaut les alias documentés : Gemini `flash-lite` / `pro`, Claude `haiku` / `opus`. Pas de défaut pour `codex` et `vibe`. Le choix est affiché dans le plan et à l'écran de sélection. `--model default` laisse la CLI faire, `--model light|standard|strong|<nom>` force, un `-m` après `--` l'emporte, `[models] auto = false` désactive.
 
+`blind model "ton prompt" [-r repo]` affiche le niveau choisi, la raison (par exemple `asks for work (ajoute); not phrased as a question`) et le drapeau exact qui serait passé. Dans le lanceur plein écran, le sélecteur `model:` à côté de la CLI force `light`, `standard`, `strong` ou `default`. Pour imposer un modèle même à une demande « standard » (au lieu de laisser la CLI choisir) : `[models.gemini] standard = "flash"`. Le drapeau `-m` est bien appliqué par Gemini (vérifié avec Gemini 0.63 : « Routing bypassed by forced model directive »). Si ta session tourne quand même sur le modèle par défaut, c'est que blind a décidé « standard », et `blind model` te dit pourquoi.
+
+### Sorties d'outils et RTK
+
+Le contexte grossit surtout avec ce que les outils renvoient (un `git diff`, une sortie de tests), et chaque requête suivante le retransmet. Deux mesures, dans le home Gemini de la session seulement :
+
+- `tools.truncateToolOutputThreshold` à 12 000 caractères (40 000 par défaut dans Gemini) : au-delà, Gemini garde le début et la fin et enregistre la sortie complète dans un fichier qu'il peut relire. `[gemini] tool_output_chars = 0` pour ne pas y toucher ; un seuil que tu as déjà dans tes réglages est respecté.
+- [RTK](https://github.com/rtk-ai/rtk), si `rtk` est installé (`cargo install --git https://github.com/rtk-ai/rtk` ; le crate nommé `rtk` sur crates.io est un autre outil) : `blind` ajoute au `settings.json` de la session le hook `BeforeTool` que fait `rtk init -g --gemini`, sans toucher à ton `~/.gemini`. Les commandes shell sont réécrites en `rtk <commande>` et leur sortie est condensée. Mesuré ici sur ce dépôt, en caractères : `git log -n 30` 11 708 → 4 957, `git diff HEAD~3` 152 129 → 40 449, `git status` 528 → 209, `ls -la` 1 299 → 482. Une courte note (environ 100 tokens) dit à l'agent que les sorties sont condensées et que `rtk proxy <commande>` donne la sortie brute. `[gemini] rtk = false` pour s'en passer. Les outils de lecture de fichiers de Gemini ne passent pas par ce hook.
+
 ### Deux niveaux : repo, puis fichiers
 
 1. **Repo** : quels repos ouvrir (voir plus haut).
@@ -237,6 +246,8 @@ isolate_home = true        # un home Gemini filtré par session
 global_memory = true       # garder ~/.gemini/GEMINI.md
 extensions = "auto"        # auto | all | none
 extensions_always = []     # extensions toujours gardées
+tool_output_chars = 12000  # sorties d'outils coupées au-delà (0 = laisser Gemini)
+rtk = true                 # hook rtk dans la session si rtk est installé
 
 [adapters.vibe]            # adapter une CLI ou en ajouter une
 binary = "vibe"
@@ -265,6 +276,7 @@ dir_style = "link"         # repeat | comma | link
 - **Interface plein écran** : testée avec le pilote de test de Textual 8.2 et sur une capture rendue ici, pas dans ton terminal. Le rendu dépend du terminal (couleurs, souris, SSH).
 - Les filtres MCP et skills ne couvrent que le niveau utilisateur, pas les plugins ni les extensions.
 - **Filtre de skills non testé en session réelle.** Pour Claude Code, `skillOverrides` vient de la documentation et du suivi d'issues (le réglage est peu documenté, et des issues signalent que `off` n'empêche pas l'appel explicite d'un skill). Pour Gemini, les clés `skills.disabled` et `context.memoryBoundaryMarkers` existent bien dans le code de la version 0.63 (relu dans le paquet npm), mais leur effet dans une vraie session n'a pas été observé, et Gemini n'applique les réglages d'un workspace que dans un dossier de confiance (d'où `GEMINI_CLI_TRUST_WORKSPACE`, qui approuve le dossier de travail de la session, c'est-à-dire le workspace aveugle).
+- **RTK** : le hook et la réécriture `git status` → `rtk git status` ont été vérifiés (Gemini 0.63 enregistre bien le hook de la session, et le hook renvoie la commande réécrite), mais pas dans une session avec un vrai appel de modèle. RTK condense avec perte : si une sortie semble incomplète, `rtk proxy <commande>` donne la sortie brute. Les gains en caractères ci-dessus sont sur ce dépôt, pas sur les tiens.
 - **Choix du modèle** : heuristique sur des mots-clés, pas une mesure. Un `light` mal choisi donne une réponse plus faible, un `strong` coûte plus cher. Les alias `flash-lite`/`pro`/`haiku`/`opus` viennent de la documentation et du code des CLI, pas d'un lancement réel. Corrige avec `[models.<cli>]` ou `--model default`. Vérifie avec `blind gemini --dry-run` puis dans la session (`/skills`).
 - `blind audit` estime en caractères / 4, pas avec un vrai tokenizer, et ne mesure pas la taille des schémas d'outils MCP (seulement leur nombre).
 

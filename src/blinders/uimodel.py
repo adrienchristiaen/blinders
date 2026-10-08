@@ -32,6 +32,7 @@ class UiResult:
     mcp: list[str]
     skills: list[str]
     recap: list[str] = field(default_factory=list)
+    model: str = "auto"   # auto | default | light | standard | strong
 
 
 class Backend:

@@ -74,6 +74,8 @@ class Config:
     gemini_keep_global_memory: bool = True   # keep ~/.gemini/GEMINI.md
     gemini_extensions: str = "auto"          # auto | all | none
     gemini_extensions_always: list[str] = field(default_factory=list)
+    gemini_tool_output_chars: int = 12000    # cut larger tool outputs (Gemini's default is 40000); 0 = leave it
+    gemini_rtk: bool = True                  # use rtk's Gemini hook in the session when rtk is installed
 
     @property
     def root_paths(self) -> list[Path]:
@@ -128,6 +130,8 @@ def load_config(path: Path | None = None) -> Config:
     cfg.gemini_keep_global_memory = bool(gem.get("global_memory", cfg.gemini_keep_global_memory))
     cfg.gemini_extensions = str(gem.get("extensions", cfg.gemini_extensions))
     cfg.gemini_extensions_always = list(gem.get("extensions_always", cfg.gemini_extensions_always))
+    cfg.gemini_tool_output_chars = int(gem.get("tool_output_chars", cfg.gemini_tool_output_chars))
+    cfg.gemini_rtk = bool(gem.get("rtk", cfg.gemini_rtk))
     skills = data.get("skills", {})
     cfg.skills_always = list(skills.get("always", []))
     cfg.skills_keywords = {k: list(v) for k, v in skills.get("keywords", {}).items()}

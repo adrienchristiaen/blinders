@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -84,6 +85,18 @@ def load_settings(path: Path) -> dict | None:
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def has_rtk_hook(settings: dict) -> bool:
+    return "rtk" in json.dumps(settings.get("hooks", {}))
+
+
+RTK_NOTE = """
+## Command output
+Shell command output in this session is condensed to save tokens (rtk). Treat it as the complete result and batch
+related commands into one call. Truncated results say how to recover the rest. Re-run a command as `rtk proxy <cmd>`
+only when its result is unusable (empty when output was expected, contradicting the exit code, or garbled).
+"""
 
 
 def _names(value) -> list[str]:
@@ -165,6 +178,7 @@ def build_home(
     skills=None,           # list[Skill] kept; None = keep every skill
     extensions=None,       # list[Extension] kept; None = keep every extension
     kept_mcp: set[str] | None = None,
+    rtk: str | None = None,   # path of the rtk binary: condense shell command output for the session
 ) -> Path | None:
     """Create ``<session>/gemini-home`` and return it, or ``None`` when settings.json cannot be read
     (then the launch continues with the real home, unfiltered)."""
@@ -183,8 +197,23 @@ def build_home(
     ctx.pop("includeDirectories", None)
     settings.pop("includeDirectories", None)
     ctx["memoryBoundaryMarkers"] = []
+    if cfg.gemini_tool_output_chars > 0:
+        tools = settings.get("tools") if isinstance(settings.get("tools"), dict) else {}
+        # Gemini keeps the head and tail of a cut output and saves the full text to a file it can read.
+        tools.setdefault("truncateToolOutputThreshold", cfg.gemini_tool_output_chars)
+        settings["tools"] = tools
     if kept_mcp is not None and isinstance(settings.get("mcpServers"), dict):
         settings["mcpServers"] = {k: v for k, v in settings["mcpServers"].items() if k in kept_mcp}
+    if rtk and not has_rtk_hook(settings):
+        # rtk's own Gemini hook (what `rtk init -g --gemini` installs), added to this session only.
+        wrapper = home / "rtk-hook-gemini.sh"
+        wrapper.write_text(f"#!/bin/bash\nexec {shlex.quote(rtk)} hook gemini\n", encoding="utf-8")
+        wrapper.chmod(0o755)
+        hooks = settings.get("hooks") if isinstance(settings.get("hooks"), dict) else {}
+        before = hooks.get("BeforeTool") if isinstance(hooks.get("BeforeTool"), list) else []
+        before.append({"matcher": "run_shell_command", "hooks": [{"type": "command", "command": str(wrapper)}]})
+        hooks["BeforeTool"] = before
+        settings["hooks"] = hooks
     target = gem / "settings.json"
     target.write_text(json.dumps(settings, indent=2), encoding="utf-8")
     target.chmod(0o600)   # MCP entries may hold tokens

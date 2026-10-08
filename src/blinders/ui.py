@@ -28,6 +28,7 @@ from textual.widgets.selection_list import Selection
 from .pipeline import STEP_TITLES, Emit, Event  # noqa: F401  (Emit re-exported for callers)
 from .uimodel import Backend, Item, UiPlan, UiResult
 
+MODEL_CHOICES = ("auto", "default", "light", "standard", "strong")
 DEBOUNCE = 0.25
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 BAR = 14
@@ -40,6 +41,7 @@ Header { background: #112343; color: #ffb84d; }
 Footer { background: #112343; }
 #top { height: auto; padding: 0 1; margin-top: 1; }
 #cli { width: 18; margin-right: 1; }
+#model { width: 24; margin-right: 1; }
 #prompt { width: 1fr; height: auto; min-height: 3; max-height: 10; background: #112343; border: tall #2b4373; }
 #prompt:focus { border: tall #ffb84d; }
 #steps { height: auto; margin: 1 2 0 2; padding: 0 1; border: round #2b4373; }
@@ -108,6 +110,7 @@ class BlindApp(App[UiResult | None]):
         super().__init__()
         self.clis, self.cli, self.initial_prompt, self.backend, self.status_text = clis, cli, prompt, backend, status
         self.plan = UiPlan()
+        self.model = "auto"                # auto | default | light | standard | strong
         self.overrides: dict[str, dict[str, bool]] = {"repos": {}, "mcp": {}, "skills": {}}
         self.steps = {i: StepState() for i in STEP_TITLES}
         self.phase = "fleet"               # fleet -> select -> map -> done
@@ -122,6 +125,7 @@ class BlindApp(App[UiResult | None]):
         yield Header(show_clock=False)
         with Horizontal(id="top"):
             yield Select([(c, c) for c in self.clis], value=self.cli, allow_blank=False, id="cli")
+            yield Select([(f"model: {m}", m) for m in MODEL_CHOICES], value="auto", allow_blank=False, id="model")
             yield PromptArea(self.initial_prompt, id="prompt", soft_wrap=True, tab_behavior="focus",
                              placeholder="Type or paste your prompt while the repos are prepared (empty = fully blind session)")
         yield Static("", id="steps")
@@ -233,6 +237,9 @@ class BlindApp(App[UiResult | None]):
         self._timer = self.set_timer(DEBOUNCE, self._recompute)
 
     def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "model":
+            self.model = str(event.value)
+            return
         if event.value != self.cli:
             self.cli = str(event.value)
             self.overrides["mcp"].clear()
@@ -361,7 +368,7 @@ class BlindApp(App[UiResult | None]):
         return [f"{mark[self.steps[i].status]} {i}  {title:<22}{self.steps[i].detail}" for i, title in STEP_TITLES.items()]
 
     def _result(self) -> UiResult:
-        return UiResult(self.cli, self._prompt(), self._picked("repos"), self._picked("mcp"), self._picked("skills"), self._recap())
+        return UiResult(self.cli, self._prompt(), self._picked("repos"), self._picked("mcp"), self._picked("skills"), self._recap(), self.model)
 
     def action_cancel(self) -> None:
         self._stop.set()
