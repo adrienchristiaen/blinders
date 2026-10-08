@@ -9,6 +9,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 import time
 from collections import Counter
 from dataclasses import asdict, dataclass, field
@@ -72,6 +73,38 @@ def _first_paragraph(readme: str) -> str:
     return ""
 
 
+MAX_PATH_ENTRIES = 4000     # files and folders visited per repo
+MAX_PATH_TERMS = 300
+YAML_NAME = re.compile(r"^\s*-?\s*name:\s*['\"]?([A-Za-z0-9_.\-]+)", re.M)
+YAML_DIRS = ("models", "snapshots", "seeds", "dags")
+
+
+def path_terms(path: Path) -> Counter[str]:
+    """Words from folder and file names (``fct_orders.sql`` gives fct, orders) plus the model, source and
+    table names declared in the YAML of a dbt project. Reads names and a few small YAML heads, never code.
+    This is what lets a repo with no README (only SQL, only manifests) be found by what it contains."""
+    counts: Counter[str] = Counter()
+    seen = 0
+    yamls: list[Path] = []
+    for root, dirs, files in os.walk(path):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith("."))
+        rel = Path(root).relative_to(path)
+        in_yaml_dir = bool(rel.parts) and rel.parts[0] in YAML_DIRS
+        for name in dirs + sorted(files):
+            seen += 1
+            stem = name.rsplit(".", 1)[0] if "." in name[1:] else name
+            counts.update(tokens(stem))
+            if in_yaml_dir and name.endswith((".yml", ".yaml")) and len(yamls) < 40:
+                yamls.append(Path(root) / name)
+        if seen >= MAX_PATH_ENTRIES:
+            break
+    project = path / "dbt_project.yml"
+    for f in ([project] if project.is_file() else []) + yamls:
+        for declared in YAML_NAME.findall(_read_head(f, 4096)):
+            counts.update(tokens(declared))
+    return counts
+
+
 def describe_repo(path: Path, map_globs: list[str]) -> Repo:
     readme = ""
     for name in ("README.md", "readme.md", "README.rst", "README"):
@@ -108,6 +141,8 @@ def describe_repo(path: Path, map_globs: list[str]) -> Repo:
         counts.update(tokens(chunk))
     counts.update(markers)
     terms = dict(counts.most_common(MAX_TERMS))
+    for term, n in path_terms(path).most_common(MAX_PATH_TERMS):
+        terms[term] = terms.get(term, 0) + n
     return Repo(
         name=path.name,
         path=str(path),

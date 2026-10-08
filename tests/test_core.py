@@ -55,6 +55,42 @@ class ScanTests(Sandbox):
         self.assertEqual(len(load_index(self.cfg, refresh=True)), 5)
 
 
+class PathVocabularyTests(Sandbox):
+    """A repo with no README (only SQL and YAML) must be found by the names it contains."""
+
+    def dbt_repo(self, name="bi-dbt"):
+        repo = make_repo(self.work, name, "", files=("dbt_project.yml",), dirs=("models", "macros"))
+        (repo / "README.md").unlink()
+        (repo / "models/marts/sales").mkdir(parents=True)
+        (repo / "dbt_project.yml").write_text("name: bi_warehouse\n")
+        (repo / "models/marts/sales/fct_orders.sql").write_text("select 1")
+        (repo / "models/marts/sales/schema.yml").write_text(
+            "sources:\n  - name: erp\n    tables:\n      - name: raw_shipments\nmodels:\n  - name: dim_customers\n")
+        return repo
+
+    def test_file_names_and_declared_dbt_names_become_terms(self):
+        from blinders.scan import describe_repo
+        terms = describe_repo(self.dbt_repo(), []).terms
+        for word in ("orders", "fct", "shipments", "customers", "erp", "warehouse", "sales"):
+            self.assertIn(word, terms, word)
+
+    def test_prompt_naming_a_table_finds_the_dbt_repo(self):
+        self.dbt_repo()
+        make_repo(self.work, "frontend", "A small React storefront.", files=("package.json",))
+        repos = build_index(self.cfg)
+        chosen = select("quel est le lineage de raw_shipments ?", repos, self.cfg)
+        self.assertEqual([c.repo.name for c in chosen], ["bi-dbt"])
+
+    def test_walk_skips_hidden_and_vendored_folders(self):
+        from blinders.scan import path_terms
+        repo = self.dbt_repo()
+        (repo / "node_modules" / "leftpad").mkdir(parents=True)
+        (repo / ".git" / "hooks").mkdir(parents=True, exist_ok=True)
+        terms = path_terms(repo)
+        self.assertNotIn("leftpad", terms)
+        self.assertNotIn("hooks", terms)
+
+
 class SelectTests(Sandbox):
     def setUp(self):
         super().setUp()

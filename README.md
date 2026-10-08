@@ -92,7 +92,7 @@ Pour ouvrir un repo en cours de session : `/add-dir <chemin>` (Claude Code) ou `
 
 ## Fonctionnement
 
-1. **Index** (`blind setup` ou `blind init`, rafraîchi tous les jours) : trouve les repos git sous tes `roots` et lit le début du README, les noms de dossiers de premier niveau, des marqueurs (`pom.xml`, `dbt_project.yml`, `Chart.yaml`...) et des fichiers de carte optionnels (`graphify-out/*.md`). Il lit aussi, en quantité bornée, les fichiers de build et de déploiement (voir plus bas). Le code applicatif n'est jamais ouvert.
+1. **Index** (`blind setup` ou `blind init`, rafraîchi tous les jours) : trouve les repos git sous tes `roots` et lit le début du README, les noms de dossiers de premier niveau, des marqueurs (`pom.xml`, `dbt_project.yml`, `Chart.yaml`...) et des fichiers de carte optionnels (`graphify-out/*.md`). Il lit aussi, en quantité bornée, les fichiers de build et de déploiement (voir plus bas). Le code applicatif n'est jamais ouvert. Les noms de dossiers et de fichiers (`fct_orders.sql` donne `fct`, `orders`) entrent aussi dans le vocabulaire du repo, avec les noms de modèles, sources et tables déclarés dans le YAML d'un projet dbt : un repo sans README, fait seulement de SQL, est retrouvé par ce qu'il contient.
 2. **Sélection** : un repo nommé dans le prompt passe en tête (le nom le plus long gagne : « sales-api-java » n'ouvre pas aussi `sales-api`). Sinon, score de type TF-IDF entre le prompt et chaque repo. Aucun score, aucun repo ouvert : la session reste aveugle. Quelques millisecondes pour des centaines de repos.
 3. **Repos liés** : voir ci-dessous.
 4. **MCP** : voir ci-dessous.
