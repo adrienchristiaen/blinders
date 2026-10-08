@@ -37,6 +37,8 @@ Avec Textual installé, `blind` (ou `blind gemini`) sans prompt sur la ligne de 
 3. **Sélection** : repos, serveurs MCP et skills gardés pour ta demande, cochés d'après ton prompt. Tu peux cocher ou décocher ; ton choix est conservé quand le prompt change. Les raisons, les repos liés et les pistes de fichiers sont affichés dessous.
 4. **Carte des repos choisis** : pour chaque repo gardé, lecture de son graphe et points de départ dans le repo.
 
+À droite du prompt, une pastille par outil optionnel (`graphify`, `rtk`) : **verte** = trouvé et utilisé pour ce lancement, **orange** = trouvé mais pas utilisé maintenant (rtk avec Claude Code, ou désactivé dans la config), **rouge** = introuvable. Le survol donne la raison et la commande d'installation. La ligne de lancement en mode texte se termine par les mêmes états.
+
 Ensuite l'écran se ferme et la vraie CLI démarre ; le résumé des quatre étapes reste dans ton terminal.
 
 Les étapes 1 et 2 démarrent immédiatement : **tu peux taper ou coller ton prompt pendant qu'elles tournent**. Si tu valides avant la fin, la validation est mise en file et continue toute seule.

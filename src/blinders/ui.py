@@ -42,6 +42,7 @@ Footer { background: #112343; }
 #top { height: auto; padding: 0 1; margin-top: 1; }
 #cli { width: 18; margin-right: 1; }
 #model { width: 40; margin-right: 1; }
+#tools { width: 14; height: auto; margin-left: 1; }
 #prompt { width: 1fr; height: auto; min-height: 3; max-height: 10; background: #112343; border: tall #2b4373; }
 #prompt:focus { border: tall #ffb84d; }
 #steps { height: auto; margin: 1 2 0 2; padding: 0 1; border: round #2b4373; }
@@ -129,6 +130,21 @@ class BlindApp(App[UiResult | None]):
             pass
         return options
 
+    def _render_tools(self) -> None:
+        """One pill per helper: green = found and used, amber = found but not used now, red = not found."""
+        colors = {"on": GREEN, "off": AMBER, "missing": RED}
+        try:
+            statuses = self.backend.tools(self.cli)
+        except Exception:  # noqa: BLE001 - a broken probe must not break the launcher
+            statuses = []
+        text = Text()
+        for i, s in enumerate(statuses):
+            text.append("\n" if i else "")
+            text.append(f"● {s.name}", style=colors.get(s.state, DIM))
+        widget = self.query_one("#tools", Static)
+        widget.update(text)
+        widget.tooltip = "\n".join(f"{s.name}: {s.detail}" for s in statuses) or None
+
     # --- layout ---------------------------------------------------------------------------------
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -137,6 +153,7 @@ class BlindApp(App[UiResult | None]):
             yield Select(self._model_options(), value="default", allow_blank=False, id="model")
             yield PromptArea(self.initial_prompt, id="prompt", soft_wrap=True, tab_behavior="focus",
                              placeholder="Type or paste your prompt while the repos are prepared (empty = fully blind session)")
+            yield Static("", id="tools")
         yield Static("", id="steps")
         with Vertical(id="body"):
             yield RichLog(id="log", wrap=True, markup=False, highlight=False)
@@ -154,6 +171,7 @@ class BlindApp(App[UiResult | None]):
         self.query_one("#lists").display = False
         self.query_one("#info").display = False
         self.query_one("#prompt", PromptArea).focus()
+        self._render_tools()
         self.set_interval(0.1, self._spin)
         self._render_steps()
         self.run_worker(self._fleet, thread=True, group="fleet")
@@ -258,6 +276,7 @@ class BlindApp(App[UiResult | None]):
             self.overrides["skills"].clear()
             self.model = "default"
             self.query_one("#model", Select).set_options(self._model_options())
+            self._render_tools()
             if self.phase == "select":
                 self._recompute()
 

@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.11.1
+- The launcher shows a pill per helper on the right of the prompt: **green** = found and used in this launch, **amber** = found but not used now (rtk with Claude Code, or switched off in the config), **red** = not found. Hover a pill for the reason and the install command. The text-mode launch line ends with the same states (`graphify on, rtk missing`).
+
 ## 0.11.0
 Architecture simplified: nothing in blind knows a language, a stack or a word list any more; everything is learned from your repos.
 - **Selection** is in two lanes: repos named in the prompt, then the repos the *rest* of the prompt describes. Words are compared as stems, and a word found in half your repos or more is ignored (computed from your repos).

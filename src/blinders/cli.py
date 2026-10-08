@@ -25,6 +25,7 @@ from . import skills as skillmod
 from .mcp import McpPlan, claude_config, discover, missing_names, select_mcp
 from . import models as modelsmod
 from .models import resolve_model
+from .tools import tool_statuses
 from . import geminihome
 from .scan import Repo, build_index, load_index
 from .select import Plan, plan, rank
@@ -458,6 +459,8 @@ def launch(cfg: Config, lp: LaunchPlan, dry_run: bool) -> int:
     for note in (lp.mcp_note, lp.skills_note, lp.home_note):
         if note:
             notes += f"; {note}"
+    helpers = tool_statuses(cfg, gemini=lp.adapter.skills_style == "gemini-workspace")
+    notes += "; " + ", ".join(f"{s.name} {s.state}" for s in helpers)
     print(f"blind: opened {names}{rel}; {len(lp.closed)} closed{notes}; {where}", file=sys.stderr)
     env_prefix = "".join(f"{k}={shlex.quote(v)} " for k, v in lp.env.items())
     if dry_run:
@@ -755,6 +758,9 @@ class FleetBackend:
 
     def models(self, cli: str) -> list[tuple[str, str]]:
         return modelsmod.cli_models(cli, Path.home())
+
+    def tools(self, cli: str):
+        return tool_statuses(self.cfg, gemini=get_adapter(cli, self.cfg).skills_style == "gemini-workspace")
 
     def map(self, prompt: str, names: list[str], emit) -> None:
         chosen = [r for r in self.repos if r.name in set(names)]

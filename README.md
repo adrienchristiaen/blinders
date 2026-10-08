@@ -29,6 +29,8 @@ blind gemini "where is the retry logic of billing-api?"   # start Gemini CLI wit
 blind claude "add a column to the orders table"            # same for Claude Code
 ```
 
+In the full-screen launcher, a pill next to the prompt shows each optional helper: green = found and used, amber = found but not used in this launch, red = not found (hover for the reason).
+
 To see what it would do without starting anything:
 
 ```bash

@@ -61,6 +61,12 @@ if HAVE_TEXTUAL:
         def models(self, cli):
             return [(f"{cli}-big", "your default"), (f"{cli}-small", "used recently")]
 
+        def tools(self, cli):
+            from blinders.tools import ToolStatus
+            return [ToolStatus("graphify", "on", "/bin/graphify"),
+                    ToolStatus("rtk", "on" if cli == "gemini" else "off", "wired to Gemini only"),
+                    ToolStatus("jq", "missing", "not installed")]
+
         def map(self, prompt, names, emit):
             self.map_calls.append((prompt, list(names)))
             emit(Event(4, "start", "reading 1 graph", 0, 1))
@@ -87,6 +93,27 @@ class UiTests(unittest.TestCase):
 
     def selected(self, app, key):
         return sorted(str(v) for v in app.query_one(f"#{key}", SelectionList).selected)
+
+    def test_tool_pills_are_green_amber_or_red_and_follow_the_cli(self):
+        async def go():
+            from textual.widgets import Select, Static
+            app = self.app("alpha")
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.selecting(pilot)
+
+                def pills():
+                    text = app.query_one("#tools", Static).render()
+                    return {span_text: str(style) for span_text, style in
+                            ((text.plain[s.start:s.end].strip("● ").strip(), s.style) for s in text.spans)}
+                first = pills()
+                self.assertEqual(set(first), {"graphify", "rtk", "jq"})
+                self.assertEqual(first["graphify"], "rgb(127,209,139)")      # on: green
+                self.assertEqual(first["rtk"], "rgb(127,209,139)")
+                self.assertEqual(first["jq"], "rgb(255,123,114)")            # missing: red
+                app.query_one("#cli", Select).value = "claude"
+                await pilot.pause(0.3)
+                self.assertEqual(pills()["rtk"], "rgb(255,184,77)")         # installed but unused here: amber
+        run(go())
 
     def test_model_selector_defaults_to_the_cli_default_and_is_returned(self):
         async def go():

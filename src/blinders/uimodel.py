@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from .pipeline import Emit, Event
+from .tools import ToolStatus
 
 
 @dataclass
@@ -52,6 +53,10 @@ class Backend:
 
     def models(self, cli: str) -> list[tuple[str, str]]:
         """(model, note) pairs the CLI really offers, for the model selector."""
+        return []
+
+    def tools(self, cli: str) -> list[ToolStatus]:
+        """Optional helpers (graphify, rtk...) and whether they are there and used, for the side pills."""
         return []
 
     def map(self, prompt: str, names: list[str], emit: Emit) -> None:
