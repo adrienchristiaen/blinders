@@ -253,6 +253,29 @@ class UiTests(unittest.TestCase):
                 self.assertEqual(self.selected(app, "mcp"), ["bq", "core"])
         run(go())
 
+    def test_a_slow_old_computation_cannot_overwrite_the_latest_prompt(self):
+        import time
+
+        class Slow(Fake):
+            def plan(self, cli, prompt):
+                if prompt == "beta slow":
+                    time.sleep(0.8)
+                return fake_plan(cli, prompt)
+
+        async def go():
+            app = BlindApp(Slow(), cli="gemini", clis=["gemini", "claude"], prompt="") if False else self.app()
+            app.backend = Slow()
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.selecting(pilot)
+                app.query_one("#prompt", TextArea).text = "beta slow"
+                await pilot.pause(0.5)            # the slow plan for "beta slow" is now running
+                app.query_one("#prompt", TextArea).text = "gamma"
+                await pilot.pause(1.6)
+                await app.workers.wait_for_complete()
+                await pilot.pause(0.1)
+                self.assertEqual(self.selected(app, "repos"), ["gamma"])
+        run(go())
+
     def test_manual_choice_survives_a_new_prompt(self):
         async def go():
             app = self.app("alpha")

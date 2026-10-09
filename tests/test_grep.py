@@ -24,6 +24,10 @@ class LiteralTests(unittest.TestCase):
     def test_plain_hyphenated_words_are_not_identifiers(self):
         self.assertEqual(literals("peut-être que c'est bien"), [])
 
+    def test_a_dotted_name_is_also_searched_by_its_identifier_parts(self):
+        self.assertEqual(literals("bucket raw_ugc_inbound.acme.com en prod"),
+                         ["raw_ugc_inbound.acme.com", "raw_ugc_inbound"])
+
     def test_duplicates_and_cap(self):
         text = " ".join(f"col_{i}" for i in range(20)) + " col_1"
         found = literals(text, limit=5)

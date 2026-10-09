@@ -56,6 +56,7 @@ SelectionList > .selection-list--button { color: #0c1a30; background: #1b2f55; }
 SelectionList > .selection-list--button-selected { color: #ffb84d; background: #1b2f55; text-style: bold; }
 SelectionList > .selection-list--button-highlighted { color: #0c1a30; background: #1b2f55; }
 SelectionList > .selection-list--button-selected-highlighted { color: #ffb84d; background: #1b2f55; text-style: bold; }
+#why { height: auto; margin: 0 2; padding: 0 1; color: #8fa3c4; }
 #info { height: auto; max-height: 9; margin: 0 2; padding: 0 1; border-left: tall #ffb84d; color: #c9d3e6; }
 Select { background: #112343; }
 """
@@ -162,6 +163,7 @@ class BlindApp(App[UiResult | None]):
                     with Vertical(classes="panel", id=f"panel-{key}"):
                         yield SelectionList(id=key)
             yield Static("", id="info")
+            yield Static("", id="why")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -170,6 +172,7 @@ class BlindApp(App[UiResult | None]):
             self.query_one(f"#panel-{key}").border_title = title
         self.query_one("#lists").display = False
         self.query_one("#info").display = False
+        self.query_one("#why").display = False
         self.query_one("#prompt", PromptArea).focus()
         self._render_tools()
         self.set_interval(0.1, self._spin)
@@ -291,8 +294,8 @@ class BlindApp(App[UiResult | None]):
         self.call_from_thread(self._apply, cli, prompt, plan)
 
     def _apply(self, cli: str, prompt: str, plan: UiPlan) -> None:
-        if cli != self.cli:
-            return
+        if cli != self.cli or prompt != self._prompt():
+            return   # an older, slower computation finished after the prompt moved on: ignore it
         self.plan = plan
         self._computed_for = (cli, prompt)
         for key in ("repos", "mcp", "skills"):
@@ -306,6 +309,18 @@ class BlindApp(App[UiResult | None]):
                 widget.highlighted = 0
             self._title(key)
         self._refresh_info()
+
+    def on_selection_list_selection_highlighted(self, event: SelectionList.SelectionHighlighted) -> None:
+        """The reason for the highlighted line, in full: the list truncates it on a narrow terminal."""
+        key = event.selection_list.id or ""
+        if key not in self.overrides or self.phase != "select":
+            return
+        name = str(event.selection.value)
+        item = next((i for i in getattr(self.plan, key) if i.name == name), None)
+        why = self.query_one("#why", Static)
+        why.display = bool(item and (item.note or item.locked))
+        if item:
+            why.update(Text(f"{item.name}: {'always kept (config)' if item.locked else item.note}"))
 
     def _title(self, key: str) -> None:
         widget = self.query_one(f"#{key}", SelectionList)
@@ -379,6 +394,7 @@ class BlindApp(App[UiResult | None]):
                      f"{len(self._picked('skills'))} skills")
         self.query_one("#lists").display = False
         self.query_one("#info").display = False
+        self.query_one("#why").display = False
         log = self.query_one("#log", RichLog)
         log.clear()
         log.display = True

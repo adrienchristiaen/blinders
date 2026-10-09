@@ -14,11 +14,22 @@ from .text import MIN_REPOS_FOR_UBIQUITY, squash, stem, stems, ubiquitous, words
 NAME_BONUS = 1000.0
 
 
+MIN_EVIDENCE = 2   # distinct prompt words a repo must match to join a repo the prompt already names
+
+
 @dataclass
 class Choice:
     repo: Repo
     score: float
     reason: str
+    hits: tuple[str, ...] = ()   # prompt stems found in the repo
+    in_name: bool = False        # one of them is a word of the repo's own name
+
+    @property
+    def solid(self) -> bool:
+        """Enough to be a companion: several words agree, or the repo's own name is in the prompt's words.
+        A single stray word ("faut", "modifier") in a README is not."""
+        return len(self.hits) >= MIN_EVIDENCE or self.in_name
 
 
 def _name_spans(repo: Repo, prompt_norm: str) -> list[tuple[int, int]]:
@@ -87,7 +98,8 @@ def rank(prompt: str, repos: list[Repo], ignore: set[str] | None = None) -> list
         if repo.path in named:
             score += NAME_BONUS
             reason = "repo named in prompt"
-        ranked.append(Choice(repo, score, reason))
+        in_name = bool(set(hits) & set(stems(repo.name)))
+        ranked.append(Choice(repo, score, reason, tuple(sorted(hits)), in_name))
     ranked.sort(key=lambda c: (-c.score, c.repo.name))
     return ranked
 
@@ -111,7 +123,7 @@ def select(prompt: str, repos: list[Repo], cfg: Config, ranked: list[Choice] | N
         return _keep_relative(ranked, cfg)[: cfg.max_repos]
     taken = {c.repo.path for c in named}
     leftover = {s for c in named for s in stems(c.repo.name)}
-    companions = [c for c in rank(prompt, repos, ignore=leftover) if c.repo.path not in taken]
+    companions = [c for c in rank(prompt, repos, ignore=leftover) if c.repo.path not in taken and c.solid]
     return (named + _keep_relative(companions, cfg))[: cfg.max_repos]
 
 
@@ -202,7 +214,7 @@ def plan(
     if not seeds or related == "none":
         return Plan(seeds, [])
     seed_names = {s for seed in seeds for s in stems(seed.repo.name)}
-    affinity = {c.repo.path: c.score for c in rank(prompt, repos, ignore=seed_names)}
+    affinity = {c.repo.path: c.score for c in rank(prompt, repos, ignore=seed_names)}   # a link is already evidence: one word completes it
     opened = list(seeds)
     listed: list[Related] = []
     budget = cfg.max_related_open

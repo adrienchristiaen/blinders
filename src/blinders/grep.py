@@ -57,6 +57,9 @@ def literals(prompt: str, limit: int = 8) -> list[str]:
         word = word.strip(".-/_")
         if len(word) >= MIN_LITERAL and _identifier_shaped(word):
             add(word)
+            for part in word.split(".") if "." in word else ():   # "raw_ugc_inbound.acme.com" also gives raw_ugc_inbound
+                if len(part) >= MIN_LITERAL and _identifier_shaped(part):
+                    add(part)
     return found
 
 

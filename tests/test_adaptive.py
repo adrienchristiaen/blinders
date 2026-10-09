@@ -145,3 +145,34 @@ class LinksNeedNoFileNameTableTests(Sandbox):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WeakEvidenceTests(Sandbox):
+    """One stray word that happens to sit in another repo's README must not bring that repo in."""
+
+    def setUp(self):
+        super().setUp()
+        from helpers import make_repo
+        make_repo(self.work, "composer-deployment", "Deployment of the composer environment.")
+        make_repo(self.work, "ticket-engine", "Il faut modifier les index avant de relancer.", files=("search.py",))
+        make_repo(self.work, "cluster-infra", "Manifests. Modifier les valeurs ici.")
+        make_repo(self.work, "photo-tools", "Photo tools.")
+        make_repo(self.work, "orders-schema", "Schema registry for orders events.")
+        from blinders.scan import build_index
+        self.repos = build_index(self.cfg)
+
+    def names(self, prompt):
+        from blinders.select import plan
+        p = plan(prompt, self.repos, self.cfg)
+        return [c.repo.name for c in p.opened], [r.repo.name for r in p.related]
+
+    def test_a_single_loose_word_is_not_enough_to_join_a_named_repo(self):
+        self.assertEqual(self.names("il faut modifier dans composer-deployment")[0], ["composer-deployment"])
+
+    def test_two_words_that_agree_are_enough(self):
+        opened, _ = self.names("composer-deployment: new orders schema events")
+        self.assertIn("orders-schema", opened)
+
+    def test_a_word_of_the_repo_name_is_enough(self):
+        opened, _ = self.names("composer-deployment and the schema")
+        self.assertIn("orders-schema", opened)

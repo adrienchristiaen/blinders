@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.1
+- **Fewer stray repos.** A repo joins a repo the prompt already names only if several prompt words agree with it, or one of them is a word of its own name. A single loose word found in some README ("faut", "modifier") no longer opens it, so it can no longer pull in its own neighbours either. A neighbour of the named repo still opens on one matching word, since the link is already evidence.
+- Common grammar words (`faut`, `doit`, `need`, `also`...) are ignored.
+- **The launcher no longer shows an outdated selection.** A slow computation for an earlier version of the prompt could finish after a newer one and overwrite it; such results are now dropped.
+- The launcher shows the full reason for the highlighted line under the lists (the list truncates it on a narrow terminal).
+- A dotted name such as `raw_ugc_inbound.acme.com` is also searched by its identifier parts.
+
 ## 0.12.0
 - **Exact identifiers are searched in every repo.** Words of the prompt that look like identifiers (`snake_case`, `camelCase`, letters mixed with digits, or anything in quotes or backticks) are looked up with `rg` (a bounded Python walk if `rg` is missing). Repos that contain them open right after the repos named in the prompt, within `max_repos`. Only repo names come back; nothing is sent to a model. An identifier found in half your repos or more is ignored, and repo names are not searched. This is how a schema change finds the deploy repo and the batch job nobody named.
 - `[grep] enabled = false` turns it off; `max_literals` (default 8) caps the identifiers searched.

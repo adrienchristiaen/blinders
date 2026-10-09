@@ -15,6 +15,8 @@ STOPWORDS = frozenset(
     how why what when where which should would could
     les des une pour avec dans sur par pas que qui est sont mais tout tous plus
     fait faire fais peux veux dois cette ces aux ses son sa ou et de du le la un en
+    faut doit peut avoir etre alors donc aussi comme dont ainsi
+    also just need please then there they them their about been being
     """.split()
 )
 STEM_LENGTH = 5
