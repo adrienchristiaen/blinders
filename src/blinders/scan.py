@@ -16,7 +16,7 @@ from pathlib import Path
 
 from .config import Config, cache_dir
 from .files import SKIP_DIRS, YAML_SUFFIXES, declared_names, iter_files
-from .relations import collect_ref_text, compute_links, identities
+from .relations import _read_text, collect_ref_text, compute_links, identities
 from .text import tokens
 
 GRAPH_REPORT = Path("graphify-out") / "GRAPH_REPORT.md"
@@ -59,6 +59,9 @@ MAX_PATH_FILES = 4000
 MAX_PATH_DEPTH = 8
 MAX_PATH_TERMS = 300
 MAX_YAML_FILES = 40
+MAX_SCRIPTS = 40
+SCRIPT_DEPTH = 2
+SCRIPT_HEAD_BYTES = 512
 
 
 def path_terms(path: Path) -> Counter[str]:
@@ -85,6 +88,20 @@ def path_terms(path: Path) -> Counter[str]:
     return counts
 
 
+def script_head(path: Path) -> str:
+    """Opening comment of each script near the top of the repo: files with a ``#!`` line or the execute bit.
+    A repo of scripts has no README and few telling file names; what the scripts say about themselves is
+    the only description it has. No language is assumed: the shebang and the permission bit decide."""
+    heads: list[str] = []
+    for file in iter_files(path, SCRIPT_DEPTH, 200):
+        if len(heads) >= MAX_SCRIPTS:
+            break
+        head = _read_text(file, SCRIPT_HEAD_BYTES)
+        if head.startswith("#!") or (head and os.access(file, os.X_OK)):
+            heads.append(head.split("\n", 1)[1] if head.startswith("#!") and "\n" in head else head)
+    return "\n".join(heads)
+
+
 def describe_repo(path: Path, map_globs: list[str]) -> Repo:
     readme = ""
     for name in ("README.md", "readme.md", "README.rst", "README"):
@@ -97,7 +114,7 @@ def describe_repo(path: Path, map_globs: list[str]) -> Repo:
         entries = []
     top_dirs = [e for e in entries if (path / e).is_dir() and not e.startswith(".") and e not in SKIP_DIRS]
 
-    chunks = [path.name] * 3 + [readme] + top_dirs
+    chunks = [path.name] * 3 + [readme] + top_dirs + [script_head(path)]
     for name in CONTEXT_FILES:
         if name in entries:
             chunks.append(_read_head(path / name, 2048))

@@ -9,7 +9,7 @@ Coding agents (Claude Code, Gemini CLI, Codex, Mistral Vibe) pay for everything 
 ## How it works
 
 1. `blind` indexes your repos once, from what is in them: README head, folder and file names, names declared in small YAML files, which repo mentions which. It does not index your source code.
-2. For each prompt it picks the repos named in it, then the repos the rest of the prompt describes (name the app and talk about a schema, and the schema repo joins), plus the repos that literally contain an identifier from your prompt (`invoice_vat_rate`, `OrderTotal`, anything quoted; searched with `rg`, only repo names come back), plus the ones they are tied to (a Kubernetes repo that deploys the service, for example), and the MCP servers and skills that match.
+2. For each prompt it picks the repos named in it, then the repos the rest of the prompt describes (name the app and talk about a schema, and the schema repo joins), plus the repos that literally contain an identifier from your prompt (`invoice_vat_rate`, `OrderTotal`, anything quoted; searched with `rg`, only repo names come back), then checks in the files of those repos that your prompt's words are really there (repos that only match by name are listed, not opened), plus the ones they are tied to (a Kubernetes repo that deploys the service, for example), and the MCP servers and skills that match.
 3. It starts your agent in a throwaway folder that contains only a short index, with the chosen repos added through the agent's own options (`--add-dir`, `--include-directories`). No hook, no patch of the agent.
 
 ## Install

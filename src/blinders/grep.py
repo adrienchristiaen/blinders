@@ -99,18 +99,23 @@ def _walk(literal_set: list[str], repos: list) -> dict[str, set[str]]:
     return found
 
 
-def search(wanted: list[str], repos: list, use_rg: bool = True) -> dict[str, list[str]]:
-    """repo path -> identifiers it contains. Identifiers found in most repos are dropped."""
+def locate(wanted: list[str], repos: list, use_rg: bool = True) -> dict[str, set[str]]:
+    """text -> paths of the repos whose files contain it (case-insensitive substring)."""
     if not wanted or not repos:
         return {}
-    by_literal: dict[str, set[str]] = {}
     if use_rg:
         try:
-            by_literal = {lit: _rg(lit, repos) for lit in wanted}
+            return {lit: _rg(lit, repos) for lit in wanted}
         except (OSError, subprocess.SubprocessError):
-            by_literal = {}
+            pass
+    return _walk(wanted, repos)
+
+
+def search(wanted: list[str], repos: list, use_rg: bool = True) -> dict[str, list[str]]:
+    """repo path -> identifiers it contains. Identifiers found in most repos are dropped."""
+    by_literal = locate(wanted, repos, use_rg)
     if not by_literal:
-        by_literal = _walk(wanted, repos)
+        return {}
     too_common = ubiquitous(
         [{lit for lit in wanted if r.path in by_literal.get(lit, ())} for r in repos], MIN_REPOS_FOR_UBIQUITY
     )

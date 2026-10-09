@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.0
+- **Second pass: the files must back the choice.** After the selection, blind looks inside the files of the few chosen repos (`rg`, no model, no tokens) for the words of your prompt. The repos you name, the repos that contain one of your identifiers, and the best match when nothing else is certain are never questioned. A repo linked to a chosen one, or with a word of its name in your prompt, needs one prompt word in its files; any other needs two. A repo that fails is only listed, with the reason, and you can tick it back. Words found in every chosen repo prove nothing. `[verify] enabled = false` turns it off.
+- **Scripts describe themselves.** The opening comment of scripts near the top of a repo (files with a `#!` line or the execute bit) is now part of what blind knows about it, so a repo of ad-hoc scripts with no README can be found by what its scripts say.
+
 ## 0.12.1
 - **Fewer stray repos.** A repo joins a repo the prompt already names only if several prompt words agree with it, or one of them is a word of its own name. A single loose word found in some README ("faut", "modifier") no longer opens it, so it can no longer pull in its own neighbours either. A neighbour of the named repo still opens on one matching word, since the link is already evidence.
 - Common grammar words (`faut`, `doit`, `need`, `also`...) are ignored.

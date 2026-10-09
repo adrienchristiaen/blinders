@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .config import Config
 from .scan import Repo
 from .grep import find_hits
+from .verify import verify
 from .text import MIN_REPOS_FOR_UBIQUITY, squash, stem, stems, ubiquitous, words
 
 NAME_BONUS = 1000.0
@@ -24,6 +25,7 @@ class Choice:
     reason: str
     hits: tuple[str, ...] = ()   # prompt stems found in the repo
     in_name: bool = False        # one of them is a word of the repo's own name
+    kind: str = "match"          # named | hit (contains an identifier) | match | related
 
     @property
     def solid(self) -> bool:
@@ -118,7 +120,7 @@ def select(prompt: str, repos: list[Repo], cfg: Config, ranked: list[Choice] | N
     the named repos' own names are set aside) is matched against every other repo, so a request that names
     the application but talks about a schema also finds the schema repo."""
     ranked = ranked if ranked is not None else rank(prompt, repos)
-    named = [c for c in ranked if c.score >= NAME_BONUS]
+    named = [replace(c, kind="named") for c in ranked if c.score >= NAME_BONUS]
     if not named:
         return _keep_relative(ranked, cfg)[: cfg.max_repos]
     taken = {c.repo.path for c in named}
@@ -133,11 +135,11 @@ def with_hits(seeds: list[Choice], hits: dict[str, list[str]], repos: list[Repo]
     if not hits:
         return seeds
     by_path = {r.path: r for r in repos}
-    named = [c for c in seeds if c.score >= NAME_BONUS]
+    named = [c for c in seeds if c.kind == "named"]
     taken = {c.repo.path for c in named}
     found = sorted((p for p in hits if p in by_path and p not in taken), key=lambda p: (-len(hits[p]), by_path[p].name))
-    contains = [Choice(by_path[p], float(len(hits[p])), "contains " + ", ".join(hits[p])) for p in found]
-    rest = [c for c in seeds if c.score < NAME_BONUS and c.repo.path not in set(found)]
+    contains = [Choice(by_path[p], float(len(hits[p])), "contains " + ", ".join(hits[p]), kind="hit") for p in found]
+    rest = [c for c in seeds if c.kind != "named" and c.repo.path not in set(found)]
     return (named + contains + rest)[: cfg.max_repos]
 
 
@@ -193,6 +195,17 @@ def neighbors(seeds: list[Repo], repos: list[Repo], cfg: Config) -> list[tuple[R
     return out
 
 
+def _verified(prompt: str, p: Plan, cfg: Config, forced: list[Repo] | None) -> Plan:
+    """Second pass (see ``verify.py``): chosen repos whose files do not mention the prompt are only listed."""
+    if forced is not None:
+        return p
+    kept, dropped = verify(prompt, p.opened, cfg)
+    if not dropped:
+        return p
+    listed = [Related(c.repo, c.score, why, opens=False) for c, why in dropped] + p.related
+    return Plan(kept, listed[: max(cfg.max_related_list, len(dropped))])
+
+
 def plan(
     prompt: str,
     repos: list[Repo],
@@ -208,11 +221,11 @@ def plan(
     regardless, ``none`` ignores relations. No word list decides this: the neighbor's own files and names do.
     """
     if forced is not None:
-        seeds = [Choice(r, NAME_BONUS, "requested") for r in forced]
+        seeds = [Choice(r, NAME_BONUS, "requested", kind="named") for r in forced]
     else:
         seeds = with_hits(select(prompt, repos, cfg), find_hits(prompt, repos, cfg), repos, cfg)
     if not seeds or related == "none":
-        return Plan(seeds, [])
+        return _verified(prompt, Plan(seeds, []), cfg, forced)
     seed_names = {s for seed in seeds for s in stems(seed.repo.name)}
     affinity = {c.repo.path: c.score for c in rank(prompt, repos, ignore=seed_names)}   # a link is already evidence: one word completes it
     opened = list(seeds)
@@ -223,7 +236,7 @@ def plan(
         if takes and budget > 0:
             budget -= 1
             reason = "related: " + why + (" (the rest of the prompt matches it)" if related == "auto" else "")
-            opened.append(Choice(repo, weight, reason))
+            opened.append(Choice(repo, weight, reason, kind="related" if related == "auto" else "asked"))
         elif len(listed) < cfg.max_related_list:
             listed.append(Related(repo, weight, why, opens=False))
-    return Plan(opened, listed)
+    return _verified(prompt, Plan(opened, listed), cfg, forced)
