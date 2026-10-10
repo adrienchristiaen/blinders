@@ -6,7 +6,7 @@ contains one of its identifiers, and the user's own picks are never questioned; 
 nothing else is certain. The others must show their proof: a repo linked to a chosen one needs one of the
 prompt's words in its files (the link is already a clue; so is a word of its own name), any other needs two. Those that do not are only
 listed, with the reason, and can be ticked back. Words found in every chosen repo prove nothing and are
-ignored.
+ignored, and so are words found in the files of more than a tenth of all your repos (everyday language).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from .config import Config
 from .grep import locate
-from .text import stem, tokens
+from .text import MIN_REPOS_FOR_UBIQUITY, stem, tokens
 
 if TYPE_CHECKING:
     from .select import Choice
@@ -24,9 +24,12 @@ JUDGED = ("related", "match")   # kinds of choice that must show proof
 PROOF = 2                        # distinct prompt words to find in the files...
 PROOF_WITH_CLUE = 1              # ...or one, when another clue already points to the repo (a link, a word of its name)
 MIN_FOR_COMMON = 3                   # with fewer repos than this, "found in all of them" says nothing
+GENERIC_SHARE = 0.1                  # a word found in the files of more than this share of all repos...
+MIN_GENERIC = 3                      # ...(and of more than this many) is everyday language: no proof
 
 
-def verify(prompt: str, choices: list[Choice], cfg: Config, cache: dict | None = None) -> tuple[list[Choice], list[tuple[Choice, str]]]:
+def verify(prompt: str, choices: list[Choice], cfg: Config, cache: dict | None = None,
+           everyone: list | None = None) -> tuple[list[Choice], list[tuple[Choice, str]]]:
     """(kept, [(dropped choice, reason)]). Nothing is dropped when the prompt gives no word to look for."""
     if not cfg.verify_enabled or not choices:
         return choices, []
@@ -40,7 +43,11 @@ def verify(prompt: str, choices: list[Choice], cfg: Config, cache: dict | None =
     if not words:
         return choices, []
     repos = [c.repo for c in choices]
-    where = locate(words, repos, cache=cache)
+    where = locate(words, repos, cache=cache, stems=True)
+    if everyone and len(everyone) >= MIN_REPOS_FOR_UBIQUITY:
+        wide = locate(words, everyone, cache=cache, stems=True)
+        limit = max(MIN_GENERIC, GENERIC_SHARE * len(everyone))
+        where = {w: p for w, p in where.items() if len(wide[w]) <= limit}
     if len(repos) >= MIN_FOR_COMMON:
         where = {w: p for w, p in where.items() if len(p) < len(repos)}
     kept: list[Choice] = []

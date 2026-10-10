@@ -10,7 +10,7 @@ from .config import Config
 from .scan import Repo
 from .grep import find_hits
 from .verify import verify
-from .text import MIN_REPOS_FOR_UBIQUITY, squash, stem, stems, ubiquitous, words
+from .text import MIN_REPOS_FOR_UBIQUITY, fold, squash, stem, stems, ubiquitous, words
 
 NAME_BONUS = 1000.0
 
@@ -39,7 +39,9 @@ def _name_spans(repo: Repo, prompt_norm: str) -> list[tuple[int, int]]:
     parts = words(repo.name)
     if len(squash(repo.name)) < 4 or not parts:
         return []
-    pattern = r"\b" + " ?".join(re.escape(p) for p in parts) + r"\b"
+    # Not inside a longer hyphenated or underscored name: `phenix-cli` is not the repo `phenix`.
+    pattern = (r"(?<![a-z0-9])(?<![a-z0-9][-_])" + "[ _-]?".join(re.escape(p) for p in parts)
+               + r"(?![a-z0-9])(?![-_][a-z0-9])")
     return [m.span() for m in re.finditer(pattern, prompt_norm)]
 
 
@@ -49,7 +51,7 @@ def _named_repos(repos: list[Repo], prompt: str) -> set[str]:
     A name that only occurs inside a longer repo name that is also matched does not count:
     "sales-api-java" must not also open "sales-api".
     """
-    prompt_norm = " ".join(words(prompt))
+    prompt_norm = fold(prompt).lower()
     spans = {r.path: _name_spans(r, prompt_norm) for r in repos}
     length = {r.path: len(squash(r.name)) for r in repos}
     named: set[str] = set()
@@ -195,11 +197,12 @@ def neighbors(seeds: list[Repo], repos: list[Repo], cfg: Config) -> list[tuple[R
     return out
 
 
-def _verified(prompt: str, p: Plan, cfg: Config, forced: list[Repo] | None, deep: bool, cache: dict | None) -> Plan:
+def _verified(prompt: str, p: Plan, cfg: Config, forced: list[Repo] | None, deep: bool, cache: dict | None,
+              repos: list[Repo]) -> Plan:
     """Second pass (see ``verify.py``): chosen repos whose files do not mention the prompt are only listed."""
     if forced is not None or not deep:
         return p
-    kept, dropped = verify(prompt, p.opened, cfg, cache)
+    kept, dropped = verify(prompt, p.opened, cfg, cache, repos)
     if not dropped:
         return p
     listed = [Related(c.repo, c.score, why, opens=False) for c, why in dropped] + p.related
@@ -230,7 +233,7 @@ def plan(
     else:
         seeds = with_hits(select(prompt, repos, cfg), find_hits(prompt, repos, cfg, cache) if deep else {}, repos, cfg)
     if not seeds or related == "none":
-        return _verified(prompt, Plan(seeds, []), cfg, forced, deep, cache)
+        return _verified(prompt, Plan(seeds, []), cfg, forced, deep, cache, repos)
     seed_names = {s for seed in seeds for s in stems(seed.repo.name)}
     affinity = {c.repo.path: c.score for c in rank(prompt, repos, ignore=seed_names)}   # a link is already evidence: one word completes it
     opened = list(seeds)
@@ -244,4 +247,4 @@ def plan(
             opened.append(Choice(repo, weight, reason, kind="related" if related == "auto" else "asked"))
         elif len(listed) < cfg.max_related_list:
             listed.append(Related(repo, weight, why, opens=False))
-    return _verified(prompt, Plan(opened, listed), cfg, forced, deep, cache)
+    return _verified(prompt, Plan(opened, listed), cfg, forced, deep, cache, repos)

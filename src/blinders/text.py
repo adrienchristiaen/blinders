@@ -15,7 +15,7 @@ STOPWORDS = frozenset(
     how why what when where which should would could
     les des une pour avec dans sur par pas que qui est sont mais tout tous plus
     fait faire fais peux veux dois cette ces aux ses son sa ou et de du le la un en
-    faut doit peut avoir etre alors donc aussi comme dont ainsi
+    faut doit peut avoir etre alors donc aussi comme dont ainsi quel quelle quels quelles lequel laquelle
     also just need please then there they them their about been being
     """.split()
 )
@@ -24,7 +24,8 @@ UBIQUITOUS_SHARE = 0.5
 MIN_REPOS_FOR_UBIQUITY = 6   # below this many repos, "found in most of them" says nothing
 
 
-def _fold(text: str) -> str:
+def fold(text: str) -> str:
+    """Accents removed (é -> e)."""
     return "".join(
         c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c)
     )
@@ -38,7 +39,7 @@ def tokens(text: str) -> list[str]:
         if len(tok) >= 3 and tok not in STOPWORDS and not tok.isdigit():
             out.append(tok)
 
-    for word in re.split(r"[^A-Za-z0-9]+", _fold(text)):
+    for word in re.split(r"[^A-Za-z0-9]+", fold(text)):
         if not word:
             continue
         parts = _CAMEL.sub(" ", word).lower().split()
@@ -51,12 +52,12 @@ def tokens(text: str) -> list[str]:
 
 def words(text: str) -> list[str]:
     """Lowercased alphanumeric words, accents folded, nothing dropped (for exact name matching)."""
-    return [w for w in re.split(r"[^a-z0-9]+", _fold(text).lower()) if w]
+    return [w for w in re.split(r"[^a-z0-9]+", fold(text).lower()) if w]
 
 
 def squash(text: str) -> str:
     """Lowercase alphanumerics only, for substring matching of repo names."""
-    return re.sub(r"[^a-z0-9]", "", _fold(text).lower())
+    return re.sub(r"[^a-z0-9]", "", fold(text).lower())
 
 
 def stem(token: str) -> str:

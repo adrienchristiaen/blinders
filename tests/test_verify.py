@@ -79,7 +79,7 @@ class VerifyTests(Sandbox):
         import blinders.grep as g
         calls = []
         real = g._rg
-        g._rg = lambda lit, repos: calls.append(lit) or real(lit, repos)
+        g._rg = lambda lit, repos, stems=False: calls.append(lit) or real(lit, repos, stems)
         try:
             cache = {}
             first = locate(["refun"], self.repos, cache=cache)

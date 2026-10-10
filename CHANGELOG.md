@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.1
+Found with the prompt "quelle est l'utilité de phenix-cli ?", which opened four unrelated repos and reached the right one only by chance.
+- **`phenix-cli` is not the repo `phenix`.** A repo name inside a longer hyphenated or underscored name no longer counts as naming that repo.
+- **Plain hyphenated names are searched in the files** like identifiers (`phenix-cli`), so the repo that mentions it is found. Everyday compounds (`est-ce`, `peut-être`) are left out, and such a name found in more repos than `max_repos` picks nothing.
+- **Everyday words no longer vouch for a repo.** The file check now matches words as stems (`cli` is not `client`; `deplo` finds `deployment`), and a word found in the files of more than a tenth of all your repos is no proof.
+- Question words (`quel`, `quelle`...) are ignored.
+
 ## 0.14.0
 - **`blind eval cases.toml`** checks the selection against your own cases (a prompt, the repos you expect, optionally repos that must not open) and prints PASS/FAIL per case, recall and precision. The exit code is 1 if a case fails, so it can run in CI. See `examples/cases.toml`.
 - **`blind bench "prompt"`** times each stage on your repos: instant pass, identifier search, full selection, full selection with cached answers.
