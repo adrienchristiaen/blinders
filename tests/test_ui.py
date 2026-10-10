@@ -494,6 +494,7 @@ class LauncherChoiceTests(Sandbox):
         names = [i.name for i in cli.ui_plan(self.cfg, repos, "gemini", "").repos]
         self.assertEqual(len(names), len(set(names)))
 
+    @unittest.skipUnless(HAVE_TEXTUAL, "needs Textual")
     def test_ticked_repos_in_the_launcher_are_final_no_related_added(self):
         import argparse
         from unittest import mock
