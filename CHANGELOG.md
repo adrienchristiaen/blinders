@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.2
+- **What you tick in the launcher is what opens.** Before, blind opened your ticked repos and then up to two linked repos on top (you ticked 5, 8 opened). Linked repos stay in the list, unticked, for you to tick.
+- **Two clones with the same folder name** (a fork, a mirror under another folder) are told apart in the launcher as `parent/name`. Before, ticking one opened both, and the name showed twice in the launch line.
+
 ## 0.13.1
 - **The launcher list follows your typing at once again.** Since 0.12.0 every pause in typing ran the content searches (identifiers, then file check) over all repos, which on many repos or a slow disk could take longer than the pause, so the list seemed frozen until you launched. Now the list is recomputed from the index alone after 0.25 s, and the pass that reads file contents follows after 1 s without typing and replaces it. Each (word, repo) answer is remembered during the launcher session, so typing a prompt searches each word once.
 

@@ -38,6 +38,15 @@ class Repo:
     graph_report: str = ""                               # path to graphify-out/GRAPH_REPORT.md if present
 
 
+def labels(repos: list[Repo]) -> dict[str, str]:
+    """repo path -> a name that is unique among ``repos``: the folder name, or ``parent/name`` when two
+    clones share it (a fork, a mirror under another folder). The launcher and the CLI exchange these."""
+    count = Counter(r.name for r in repos)
+    out = {r.path: r.name if count[r.name] == 1 else f"{Path(r.path).parent.name}/{r.name}" for r in repos}
+    again = Counter(out.values())
+    return {p: (lab if again[lab] == 1 else p) for p, lab in out.items()}
+
+
 def _read_head(path: Path, limit: int) -> str:
     try:
         with path.open("r", encoding="utf-8", errors="ignore") as fh:

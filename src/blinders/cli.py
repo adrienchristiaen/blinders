@@ -27,7 +27,7 @@ from . import models as modelsmod
 from .models import resolve_model
 from .tools import tool_statuses
 from . import geminihome
-from .scan import Repo, build_index, load_index
+from .scan import Repo, build_index, labels, load_index
 from .select import Plan, plan, rank
 from .workspace import CONTEXT_FILENAMES, create_session, prune_sessions
 
@@ -673,12 +673,13 @@ def ui_plan(cfg: Config, repos: list[Repo], cli: str, prompt: str, deep: bool = 
     from .uimodel import Item, UiPlan
     adapter = get_adapter(cli, cfg)
     seed = plan(prompt, repos, cfg, deep=deep, cache=cache) if prompt else None
-    opened = {c.repo.name: c.reason for c in seed.opened} if seed else {}
-    related = {r.repo.name: r.why for r in seed.related} if seed else {}
-    rest = sorted((r for r in repos if r.name not in opened and r.name not in related), key=lambda r: r.name.lower())
+    lab = labels(repos)
+    opened = {lab[c.repo.path]: c.reason for c in seed.opened} if seed else {}
+    related = {lab[r.repo.path]: r.why for r in seed.related} if seed else {}
+    rest = sorted((lab[r.path] for r in repos if lab[r.path] not in opened and lab[r.path] not in related), key=str.lower)
     items = [Item(n, True, why) for n, why in opened.items()]
     items += [Item(n, False, "related") for n in related]
-    items += [Item(r.name, False, "") for r in rest]
+    items += [Item(n, False, "") for n in rest]
     out = UiPlan(repos=items)
     out.info += [f"related, closed: {n}: {why}" for n, why in list(related.items())[:3]]
     splan = mplan = None
@@ -692,7 +693,7 @@ def ui_plan(cfg: Config, repos: list[Repo], cli: str, prompt: str, deep: bool = 
         out.info.append(f"{adapter.name}: no MCP filter available here")
     if adapter.skills_style != "none":
         installed = skillmod.discover(adapter.skills_style.split("-")[0], Path.home(), cfg)
-        opened_repos = [r for r in repos if r.name in opened]
+        opened_repos = [r for r in repos if lab[r.path] in opened]
         splan = skillmod.select_skills(prompt, installed, cfg, "auto", repos=opened_repos)
         kept = {s.name for s in splan.kept}
         out.skills = [Item(s.name, s.name in kept, splan.reasons.get(s.name, "") or s.source, locked=s.name in cfg.skills_always)
@@ -712,7 +713,8 @@ def ui_plan(cfg: Config, repos: list[Repo], cli: str, prompt: str, deep: bool = 
 
 
 def ui_hints(cfg: Config, repos: list[Repo], prompt: str, names: list[str]) -> list[str]:
-    by_name = {r.name: r for r in repos}
+    lab = labels(repos)
+    by_name = {lab[r.path]: r for r in repos}
     lines: list[str] = []
     if not prompt or not cfg.hints_enabled:
         return lines
@@ -764,7 +766,8 @@ class FleetBackend:
         return tool_statuses(self.cfg, gemini=get_adapter(cli, self.cfg).skills_style == "gemini-workspace")
 
     def map(self, prompt: str, names: list[str], emit) -> None:
-        chosen = [r for r in self.repos if r.name in set(names)]
+        lab = labels(self.repos)
+        chosen = [r for r in self.repos if lab[r.path] in set(names)]
         run_map(self.cfg, chosen, prompt, emit)
 
 
@@ -783,7 +786,9 @@ def run_launcher(args, cfg: Config, repos: list[Repo], cli: str | None, extra: l
     repos = backend.repos
     adapter = get_adapter(res.cli, cfg)
     chosen = set(res.repos)
-    forced = [r for r in repos if r.name in chosen]
+    lab = labels(repos)
+    forced = [r for r in repos if lab[r.path] in chosen]
+    args.related = "none"   # the ticks are the final word: no neighbour is opened on top of them
     args.mcp = args.skills = None
     if res.model != "default":
         args.model = res.model   # chosen on the launcher screen; otherwise the --model flag (if any) stays

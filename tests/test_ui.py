@@ -477,3 +477,36 @@ class DiagnosticsTests(Sandbox):
              redirect_stderr(err), redirect_stdout(io.StringIO()):
             cli.main([])
         self.assertIn("needs Textual in this Python", err.getvalue())
+
+
+class LauncherChoiceTests(Sandbox):
+    def test_two_clones_with_the_same_name_get_distinct_labels(self):
+        from blinders import cli
+        from blinders.scan import build_index, labels
+        from helpers import make_repo
+        (self.work / "mirror").mkdir()
+        make_repo(self.work, "shared-name", "A repo.")
+        make_repo(self.work / "mirror", "shared-name", "Its mirror.")
+        make_repo(self.work, "other", "Another.")
+        repos = build_index(self.cfg)
+        lab = labels(repos)
+        self.assertEqual(sorted(lab.values()), ["mirror/shared-name", "other", "work/shared-name"])
+        names = [i.name for i in cli.ui_plan(self.cfg, repos, "gemini", "").repos]
+        self.assertEqual(len(names), len(set(names)))
+
+    def test_ticked_repos_in_the_launcher_are_final_no_related_added(self):
+        import argparse
+        from unittest import mock
+        from blinders import cli
+        from blinders.scan import build_index
+        from blinders.uimodel import UiResult
+        self.sales_repos()
+        repos = build_index(self.cfg)
+        res = UiResult("gemini", "comment sales-api-java est déployé sur kubernetes", ["sales-api-java"], [], [])
+        args = argparse.Namespace(prompt=[], sync=None, related="auto", model=None, mcp=None, skills=None,
+                                  no_sync=False, repos=None, link=False, primary=False, no_hints=False,
+                                  no_fleet=True, refresh=False, extensions=None, no_isolate=False)
+        with mock.patch("blinders.ui.run_ui", return_value=res), \
+             mock.patch.object(cli, "_installed_clis", return_value=["gemini"]):
+            lp, _ = cli.run_launcher(args, self.cfg, repos, "gemini", [])
+        self.assertEqual([r.name for r in lp.opened], ["sales-api-java"])
