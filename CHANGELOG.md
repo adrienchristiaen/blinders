@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.0
+- **`blind eval cases.toml`** checks the selection against your own cases (a prompt, the repos you expect, optionally repos that must not open) and prints PASS/FAIL per case, recall and precision. The exit code is 1 if a case fails, so it can run in CI. See `examples/cases.toml`.
+- **`blind bench "prompt"`** times each stage on your repos: instant pass, identifier search, full selection, full selection with cached answers.
+
 ## 0.13.2
 - **What you tick in the launcher is what opens.** Before, blind opened your ticked repos and then up to two linked repos on top (you ticked 5, 8 opened). Linked repos stay in the list, unticked, for you to tick.
 - **Two clones with the same folder name** (a fork, a mirror under another folder) are told apart in the launcher as `parent/name`. Before, ticking one opened both, and the name showed twice in the launch line.

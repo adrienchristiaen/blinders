@@ -38,6 +38,8 @@ blind select "add a column to the orders table"   # repos that would open, relat
 blind doctor                                      # what blind can see on this machine
 ```
 
+To check the selection against prompts you know the answer to, write cases in a TOML file (see `examples/cases.toml`) and run `blind eval cases.toml`; `blind bench "prompt"` times each stage on your repos.
+
 To check the gain on your own repos, run the same prompt both ways and compare:
 
 ```bash

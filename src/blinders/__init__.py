@@ -1,3 +1,3 @@
 """blinders: start agent CLIs blind, open only the repos a prompt needs."""
 
-__version__ = "0.13.2"
+__version__ = "0.14.0"

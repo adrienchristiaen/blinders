@@ -1,0 +1,11 @@
+# Cases for `blind eval examples/cases.toml`. Each case is a prompt you would really type
+# and the repos you know it needs. Replace these with your own.
+
+[[case]]
+prompt = "il faut modifier dans composer-deployment"
+expect = ["composer-deployment"]     # must be opened
+avoid  = ["k8s"]                     # must not be opened (optional)
+
+[[case]]
+prompt = "rename the column invoice_vat_rate in the billing schema"
+expect = ["billing-app", "cluster-config"]

@@ -83,7 +83,7 @@ def _add_run_args(s: argparse.ArgumentParser) -> None:
     _add_launch_args(s)
 
 
-ADVANCED_COMMANDS = ("init", "run", "mcp", "graph", "audit", "sync", "stats", "models", "clean")
+ADVANCED_COMMANDS = ("init", "run", "mcp", "graph", "audit", "sync", "stats", "models", "clean", "eval", "bench")
 HELP_EPILOG = """\
 usage:
   blind                      pick what to open, then start your agent (full-screen, or text mode)
@@ -119,6 +119,13 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true")
     s.add_argument("--all", action="store_true", help="show the full ranking, not just the selection")
     s.add_argument("--related", choices=("auto", "all", "none"), default="auto")
+
+    s = sub.add_parser("eval", help="check the selection against your own cases (prompt -> repos you expect)")
+    s.add_argument("cases", help="TOML file with [[case]] entries: prompt, expect, avoid")
+    s.add_argument("--json", action="store_true")
+
+    s = sub.add_parser("bench", help="time each stage of the selection on your repos")
+    s.add_argument("prompt", nargs="+")
 
     _add_run_args(sub.add_parser("run", help="start a CLI blind, opening only the selected repos"))
 
@@ -203,6 +210,26 @@ def cmd_select(args, cfg: Config) -> int:
     for s, n, why, st in rows + related_rows:
         print(f"{s:>9.2f}  {n:<28} {st:<16} ({why})")
     print(f"selection took {ms:.1f} ms over {len(repos)} repos", file=sys.stderr)
+    return 0
+
+
+def cmd_eval(args, cfg: Config) -> int:
+    from .evaluate import load_cases, render, run_cases
+    try:
+        cases = load_cases(Path(args.cases).expanduser())
+    except (OSError, ValueError) as exc:
+        return _err(f"{args.cases}: {exc}")
+    results = run_cases(cases, load_index(cfg), cfg)
+    print(render(results, as_json=args.json))
+    return 0 if all(r.passed for r in results) else 1
+
+
+def cmd_bench(args, cfg: Config) -> int:
+    from .evaluate import bench
+    repos = load_index(cfg)
+    for label, ms in bench(" ".join(args.prompt), repos, cfg):
+        print(f"{ms:>8.1f} ms  {label}")
+    print(f"over {len(repos)} repos", file=sys.stderr)
     return 0
 
 
@@ -1107,7 +1134,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     handlers = {
         "setup": cmd_setup, "doctor": cmd_doctor, "models": cmd_models, "sync": cmd_sync, "status": cmd_status, "stats": cmd_stats, "init": cmd_init, "list": cmd_list, "select": cmd_select, "mcp": cmd_mcp,
-        "graph": cmd_graph, "audit": cmd_audit, "clean": cmd_clean,
+        "graph": cmd_graph, "audit": cmd_audit, "clean": cmd_clean, "eval": cmd_eval, "bench": cmd_bench,
     }
     return handlers[args.cmd](args, cfg)
 
