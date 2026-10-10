@@ -68,6 +68,27 @@ class VerifyTests(Sandbox):
         self.assertEqual(paths, plain)
         self.assertEqual({r.name for r in self.repos if r.path in paths["refun"]}, {"billing-app", "refund-engine"})
 
+    def test_deep_false_reads_no_file_contents(self):
+        p = plan("in billing-app fix the invoice refund", self.repos, self.cfg, deep=False)
+        names = [c.repo.name for c in p.opened]
+        self.assertIn("refund-tools", names)    # not verified: that pass is skipped
+        p = plan("change invoice_refund now", self.repos, self.cfg, deep=False)
+        self.assertNotIn("contains", " ".join(c.reason for c in p.opened))   # no identifier search either
+
+    def test_a_cache_makes_the_second_search_free(self):
+        import blinders.grep as g
+        calls = []
+        real = g._rg
+        g._rg = lambda lit, repos: calls.append(lit) or real(lit, repos)
+        try:
+            cache = {}
+            first = locate(["refun"], self.repos, cache=cache)
+            again = locate(["refun"], self.repos, cache=cache)
+        finally:
+            g._rg = real
+        self.assertEqual(first, again)
+        self.assertEqual(calls, ["refun"])
+
 
 class RelatedNeedsOneWord(Sandbox):
     def test_a_linked_repo_needs_only_one_word_in_its_files(self):
@@ -95,3 +116,4 @@ class ScriptHeaderTests(Sandbox):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -668,11 +668,11 @@ def ui_available() -> bool:
     return True
 
 
-def ui_plan(cfg: Config, repos: list[Repo], cli: str, prompt: str):
+def ui_plan(cfg: Config, repos: list[Repo], cli: str, prompt: str, deep: bool = True, cache: dict | None = None):
     """Automatic choice for the full-screen launcher: every repo / MCP server / skill, ticked or not."""
     from .uimodel import Item, UiPlan
     adapter = get_adapter(cli, cfg)
-    seed = plan(prompt, repos, cfg) if prompt else None
+    seed = plan(prompt, repos, cfg, deep=deep, cache=cache) if prompt else None
     opened = {c.repo.name: c.reason for c in seed.opened} if seed else {}
     related = {r.repo.name: r.why for r in seed.related} if seed else {}
     rest = sorted((r for r in repos if r.name not in opened and r.name not in related), key=lambda r: r.name.lower())
@@ -737,6 +737,7 @@ class FleetBackend:
 
     def __init__(self, cfg: Config, args, repos: list[Repo]) -> None:
         self.cfg, self.args, self.repos = cfg, args, repos
+        self._cache: dict = {}   # content searches already done, shared by the launcher's successive calls
 
     def sync(self, emit, stop) -> None:
         if self.args.no_fleet:
@@ -750,8 +751,8 @@ class FleetBackend:
             return
         self.repos = run_graphs(self.cfg, self.repos, emit, should_stop=stop)
 
-    def plan(self, cli: str, prompt: str):
-        return ui_plan(self.cfg, self.repos, cli, prompt)
+    def plan(self, cli: str, prompt: str, deep: bool = True):
+        return ui_plan(self.cfg, self.repos, cli, prompt, deep=deep, cache=self._cache)
 
     def hints(self, cli: str, prompt: str, names: list[str]) -> list[str]:
         return ui_hints(self.cfg, self.repos, prompt, names)

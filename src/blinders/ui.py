@@ -29,7 +29,8 @@ from textual.widgets.selection_list import Selection
 from .pipeline import STEP_TITLES, Emit, Event  # noqa: F401  (Emit re-exported for callers)
 from .uimodel import Backend, Item, UiPlan, UiResult
 
-DEBOUNCE = 0.25
+DEBOUNCE = 0.25        # the list follows your typing from the index alone, at once
+DEEP_DEBOUNCE = 1.0    # once you pause this long, the files of the chosen repos are read as well
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 BAR = 14
 AMBER, GREEN, RED, DIM = "#ffb84d", "#7fd18b", "#ff7b72", "#6f86ad"
@@ -119,6 +120,7 @@ class BlindApp(App[UiResult | None]):
         self.queued = False                # validated before the graphs were ready
         self._stop = threading.Event()
         self._timer = None
+        self._deep_timer = None
         self._tick = 0
         self._computed_for: tuple[str, str] | None = None
 
@@ -268,6 +270,9 @@ class BlindApp(App[UiResult | None]):
         if self._timer is not None:
             self._timer.stop()
         self._timer = self.set_timer(DEBOUNCE, self._recompute)
+        if self._deep_timer is not None:
+            self._deep_timer.stop()
+        self._deep_timer = self.set_timer(DEEP_DEBOUNCE, self._deepen)
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "model":
@@ -284,20 +289,34 @@ class BlindApp(App[UiResult | None]):
                 self._recompute()
 
     def _recompute(self) -> None:
+        """Instant pass from the index. The pass that reads file contents follows in ``_deepen``."""
+        self._run_plan(deep=False)
+        if self._deep_timer is None:   # no typing involved (CLI switch, first display): go on to the full pass
+            self._deep_timer = self.set_timer(DEEP_DEBOUNCE, self._deepen)
+
+    def _deepen(self) -> None:
+        self._deep_timer = None
+        self._run_plan(deep=True)
+
+    def _run_plan(self, deep: bool) -> None:
         if self.phase != "select":
             return
         prompt, cli = self._prompt(), self.cli
-        self.run_worker(lambda: self._plan_work(cli, prompt), thread=True, exclusive=True, group="plan")
+        group = "plan-deep" if deep else "plan"
+        self.run_worker(lambda: self._plan_work(cli, prompt, deep), thread=True, exclusive=True, group=group)
 
-    def _plan_work(self, cli: str, prompt: str) -> None:
-        plan = self.backend.plan(cli, prompt)
-        self.call_from_thread(self._apply, cli, prompt, plan)
+    def _plan_work(self, cli: str, prompt: str, deep: bool) -> None:
+        plan = self.backend.plan(cli, prompt, deep)
+        self.call_from_thread(self._apply, cli, prompt, plan, deep)
 
-    def _apply(self, cli: str, prompt: str, plan: UiPlan) -> None:
+    def _apply(self, cli: str, prompt: str, plan: UiPlan, deep: bool = True) -> None:
         if cli != self.cli or prompt != self._prompt():
             return   # an older, slower computation finished after the prompt moved on: ignore it
+        if not deep and self._computed_for == (cli, prompt):
+            return   # the full answer for this very prompt is already on screen
         self.plan = plan
-        self._computed_for = (cli, prompt)
+        if deep:
+            self._computed_for = (cli, prompt)
         for key in ("repos", "mcp", "skills"):
             items: list[Item] = getattr(plan, key)
             widget = self.query_one(f"#{key}", SelectionList)
@@ -383,9 +402,10 @@ class BlindApp(App[UiResult | None]):
     def _begin_map(self) -> None:
         prompt = self._prompt()
         if self._computed_for != (self.cli, prompt):   # the debounce may not have fired yet
-            if self._timer is not None:
-                self._timer.stop()
-            self._apply(self.cli, prompt, self.backend.plan(self.cli, prompt))
+            for timer in (self._timer, self._deep_timer):
+                if timer is not None:
+                    timer.stop()
+            self._apply(self.cli, prompt, self.backend.plan(self.cli, prompt, True), True)
         self.phase = "map"
         repos = self._picked("repos")
         st = self.steps[3]

@@ -52,7 +52,7 @@ if HAVE_TEXTUAL:
             emit(Event(2, "progress", "beta", 2, 2))
             emit(Event(2, "done", "2 built or updated, 1 already current", 2, 2, "ok"))
 
-        def plan(self, cli, prompt):
+        def plan(self, cli, prompt, deep=True):
             return fake_plan(cli, prompt)
 
         def hints(self, cli, prompt, names):
@@ -257,7 +257,7 @@ class UiTests(unittest.TestCase):
         import time
 
         class Slow(Fake):
-            def plan(self, cli, prompt):
+            def plan(self, cli, prompt, deep=True):
                 if prompt == "beta slow":
                     time.sleep(0.8)
                 return fake_plan(cli, prompt)
@@ -274,6 +274,25 @@ class UiTests(unittest.TestCase):
                 await app.workers.wait_for_complete()
                 await pilot.pause(0.1)
                 self.assertEqual(self.selected(app, "repos"), ["gamma"])
+        run(go())
+
+    def test_the_list_follows_typing_at_once_while_the_file_pass_is_slow(self):
+        import time
+
+        class DeepIsSlow(Fake):
+            def plan(self, cli, prompt, deep=True):
+                if deep:
+                    time.sleep(1.5)
+                return fake_plan(cli, prompt)
+
+        async def go():
+            app = self.app()
+            app.backend = DeepIsSlow()
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.selecting(pilot)
+                app.query_one("#prompt", TextArea).text = "fix beta"
+                await pilot.pause(0.7)      # well before the slow file pass could have finished
+                self.assertEqual(self.selected(app, "repos"), ["beta"])
         run(go())
 
     def test_manual_choice_survives_a_new_prompt(self):

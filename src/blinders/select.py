@@ -195,11 +195,11 @@ def neighbors(seeds: list[Repo], repos: list[Repo], cfg: Config) -> list[tuple[R
     return out
 
 
-def _verified(prompt: str, p: Plan, cfg: Config, forced: list[Repo] | None) -> Plan:
+def _verified(prompt: str, p: Plan, cfg: Config, forced: list[Repo] | None, deep: bool, cache: dict | None) -> Plan:
     """Second pass (see ``verify.py``): chosen repos whose files do not mention the prompt are only listed."""
-    if forced is not None:
+    if forced is not None or not deep:
         return p
-    kept, dropped = verify(prompt, p.opened, cfg)
+    kept, dropped = verify(prompt, p.opened, cfg, cache)
     if not dropped:
         return p
     listed = [Related(c.repo, c.score, why, opens=False) for c, why in dropped] + p.related
@@ -212,6 +212,8 @@ def plan(
     cfg: Config,
     related: str = "auto",
     forced: list[Repo] | None = None,
+    deep: bool = True,
+    cache: dict | None = None,
 ) -> Plan:
     """Seeds, then their related repos.
 
@@ -219,13 +221,16 @@ def plan(
     ``related``: ``auto`` opens a neighbor when the *rest* of the prompt (what is left once the seeds' own
     names are set aside) also matches what that neighbor contains, ``all`` opens the strongest neighbors
     regardless, ``none`` ignores relations. No word list decides this: the neighbor's own files and names do.
+
+    ``deep=False`` skips the two passes that read file contents (identifier search, verification): instant,
+    for the launcher while you type. ``cache`` is passed to them so that repeated calls reuse answers.
     """
     if forced is not None:
         seeds = [Choice(r, NAME_BONUS, "requested", kind="named") for r in forced]
     else:
-        seeds = with_hits(select(prompt, repos, cfg), find_hits(prompt, repos, cfg), repos, cfg)
+        seeds = with_hits(select(prompt, repos, cfg), find_hits(prompt, repos, cfg, cache) if deep else {}, repos, cfg)
     if not seeds or related == "none":
-        return _verified(prompt, Plan(seeds, []), cfg, forced)
+        return _verified(prompt, Plan(seeds, []), cfg, forced, deep, cache)
     seed_names = {s for seed in seeds for s in stems(seed.repo.name)}
     affinity = {c.repo.path: c.score for c in rank(prompt, repos, ignore=seed_names)}   # a link is already evidence: one word completes it
     opened = list(seeds)
@@ -239,4 +244,4 @@ def plan(
             opened.append(Choice(repo, weight, reason, kind="related" if related == "auto" else "asked"))
         elif len(listed) < cfg.max_related_list:
             listed.append(Related(repo, weight, why, opens=False))
-    return _verified(prompt, Plan(opened, listed), cfg, forced)
+    return _verified(prompt, Plan(opened, listed), cfg, forced, deep, cache)

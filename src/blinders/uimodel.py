@@ -45,7 +45,8 @@ class Backend:
     def graphs(self, emit: Emit, stop: Callable[[], bool]) -> None:
         emit(Event(2, "done", "skipped", level="warn"))
 
-    def plan(self, cli: str, prompt: str) -> UiPlan:
+    def plan(self, cli: str, prompt: str, deep: bool = True) -> UiPlan:
+        """``deep=False``: instant answer from the index only; ``True``: also reads file contents."""
         return UiPlan()
 
     def hints(self, cli: str, prompt: str, names: list[str]) -> list[str]:

@@ -99,21 +99,38 @@ def _walk(literal_set: list[str], repos: list) -> dict[str, set[str]]:
     return found
 
 
-def locate(wanted: list[str], repos: list, use_rg: bool = True) -> dict[str, set[str]]:
-    """text -> paths of the repos whose files contain it (case-insensitive substring)."""
-    if not wanted or not repos:
-        return {}
+def _find(lit: str, repos: list, use_rg: bool) -> set[str]:
     if use_rg:
         try:
-            return {lit: _rg(lit, repos) for lit in wanted}
+            return _rg(lit, repos)
         except (OSError, subprocess.SubprocessError):
             pass
-    return _walk(wanted, repos)
+    return _walk([lit], repos)[lit]
 
 
-def search(wanted: list[str], repos: list, use_rg: bool = True) -> dict[str, list[str]]:
+def locate(wanted: list[str], repos: list, use_rg: bool = True, cache: dict | None = None) -> dict[str, set[str]]:
+    """text -> paths of the repos whose files contain it (case-insensitive substring).
+
+    ``cache`` (optional, owned by the caller) remembers answers per (text, repo), so typing a prompt letter
+    by letter in the launcher searches each word once."""
+    if not wanted or not repos:
+        return {}
+    cache = cache if cache is not None else {}
+    out: dict[str, set[str]] = {}
+    for lit in wanted:
+        key = lit.lower()
+        missing = [r for r in repos if (key, r.path) not in cache]
+        if missing:
+            found = _find(lit, missing, use_rg)
+            for r in missing:
+                cache[(key, r.path)] = r.path in found
+        out[lit] = {r.path for r in repos if cache[(key, r.path)]}
+    return out
+
+
+def search(wanted: list[str], repos: list, use_rg: bool = True, cache: dict | None = None) -> dict[str, list[str]]:
     """repo path -> identifiers it contains. Identifiers found in most repos are dropped."""
-    by_literal = locate(wanted, repos, use_rg)
+    by_literal = locate(wanted, repos, use_rg, cache)
     if not by_literal:
         return {}
     too_common = ubiquitous(
@@ -128,10 +145,10 @@ def search(wanted: list[str], repos: list, use_rg: bool = True) -> dict[str, lis
     return hits
 
 
-def find_hits(prompt: str, repos: list, cfg: Config) -> dict[str, list[str]]:
+def find_hits(prompt: str, repos: list, cfg: Config, cache: dict | None = None) -> dict[str, list[str]]:
     """Repos that contain identifiers from the prompt (repo names themselves are not searched)."""
     if not cfg.grep_enabled:
         return {}
     known = {normalize(i) for r in repos for i in (r.identities + [r.name])}
     wanted = [lit for lit in literals(prompt, cfg.grep_max_literals) if normalize(lit) not in known]
-    return search(wanted, repos)
+    return search(wanted, repos, cache=cache)

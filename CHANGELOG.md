@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.13.1
+- **The launcher list follows your typing at once again.** Since 0.12.0 every pause in typing ran the content searches (identifiers, then file check) over all repos, which on many repos or a slow disk could take longer than the pause, so the list seemed frozen until you launched. Now the list is recomputed from the index alone after 0.25 s, and the pass that reads file contents follows after 1 s without typing and replaces it. Each (word, repo) answer is remembered during the launcher session, so typing a prompt searches each word once.
+
 ## 0.13.0
 - **Second pass: the files must back the choice.** After the selection, blind looks inside the files of the few chosen repos (`rg`, no model, no tokens) for the words of your prompt. The repos you name, the repos that contain one of your identifiers, and the best match when nothing else is certain are never questioned. A repo linked to a chosen one, or with a word of its name in your prompt, needs one prompt word in its files; any other needs two. A repo that fails is only listed, with the reason, and you can tick it back. Words found in every chosen repo prove nothing. `[verify] enabled = false` turns it off.
 - **Scripts describe themselves.** The opening comment of scripts near the top of a repo (files with a `#!` line or the execute bit) is now part of what blind knows about it, so a repo of ad-hoc scripts with no README can be found by what its scripts say.

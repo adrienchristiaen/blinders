@@ -26,7 +26,7 @@ PROOF_WITH_CLUE = 1              # ...or one, when another clue already points t
 MIN_FOR_COMMON = 3                   # with fewer repos than this, "found in all of them" says nothing
 
 
-def verify(prompt: str, choices: list[Choice], cfg: Config) -> tuple[list[Choice], list[tuple[Choice, str]]]:
+def verify(prompt: str, choices: list[Choice], cfg: Config, cache: dict | None = None) -> tuple[list[Choice], list[tuple[Choice, str]]]:
     """(kept, [(dropped choice, reason)]). Nothing is dropped when the prompt gives no word to look for."""
     if not cfg.verify_enabled or not choices:
         return choices, []
@@ -40,7 +40,7 @@ def verify(prompt: str, choices: list[Choice], cfg: Config) -> tuple[list[Choice
     if not words:
         return choices, []
     repos = [c.repo for c in choices]
-    where = locate(words, repos)
+    where = locate(words, repos, cache=cache)
     if len(repos) >= MIN_FOR_COMMON:
         where = {w: p for w, p in where.items() if len(p) < len(repos)}
     kept: list[Choice] = []
