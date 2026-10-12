@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.14.2
+- **No more freezes at step 3.** Two causes. Pressing Enter right after typing ran the slow file search on the screen's own thread, so the whole screen froze until it finished (minutes on many repos or a slow disk); it now uses the instant pass. And the file searches had no time limit (30 s per word); they now share a budget of 3 seconds per selection (`[search] budget_seconds`, 0 = no limit). When the budget runs out the selection is given without the file checks, and what was already found is remembered, so the next pass goes further.
+
 ## 0.14.1
 Found with the prompt "quelle est l'utilité de phenix-cli ?", which opened four unrelated repos and reached the right one only by chance.
 - **`phenix-cli` is not the repo `phenix`.** A repo name inside a longer hyphenated or underscored name no longer counts as naming that repo.

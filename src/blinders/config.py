@@ -67,6 +67,7 @@ class Config:
     grep_max_literals: int = 8
     # check in the files of the chosen repos that the prompt's words are really there
     verify_enabled: bool = True
+    deep_budget: float = 3.0       # seconds for the content searches of one selection; 0 = no limit
     # interactive entry point
     default_cli: str = ""          # used by a bare `blind`; empty = ask or autodetect
     models: dict[str, dict[str, str]] = field(default_factory=dict)  # per CLI: {"default": "<model>"}
@@ -138,6 +139,7 @@ def load_config(path: Path | None = None) -> Config:
     cfg.grep_enabled = bool(grep.get("enabled", cfg.grep_enabled))
     cfg.grep_max_literals = int(grep.get("max_literals", cfg.grep_max_literals))
     cfg.verify_enabled = bool(data.get("verify", {}).get("enabled", cfg.verify_enabled))
+    cfg.deep_budget = float(data.get("search", {}).get("budget_seconds", cfg.deep_budget))
     skills = data.get("skills", {})
     cfg.skills_always = list(skills.get("always", []))
     cfg.skills_keywords = {k: list(v) for k, v in skills.get("keywords", {}).items()}

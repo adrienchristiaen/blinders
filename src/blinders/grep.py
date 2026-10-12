@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import time
 from pathlib import Path
 
 from .config import Config
@@ -22,7 +23,21 @@ from .text import MIN_REPOS_FOR_UBIQUITY, STEM_LENGTH, ubiquitous
 MIN_LITERAL = 5          # characters, unless the user quoted it
 MAX_FILES = 4000
 MAX_DEPTH = 8
-RG_TIMEOUT = 30          # seconds, for one identifier over all repos
+RG_TIMEOUT = 30          # seconds, for one search when there is no deadline
+
+
+class SearchTimeout(Exception):
+    """The time given to the content searches ran out. Answers already found stay in the cache."""
+
+
+def _left(deadline: float | None) -> float:
+    """Seconds before the deadline (RG_TIMEOUT without one); raises SearchTimeout when there are none."""
+    if deadline is None:
+        return RG_TIMEOUT
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise SearchTimeout
+    return left
 SKIP_GLOBS = ("!graphify-out", "!.blinders")   # our own generated notes would match every identifier
 
 _QUOTED = re.compile(r"`([^`\s]{3,})`|\"([^\"\s]{3,})\"")
@@ -83,18 +98,21 @@ def stem_pattern(word: str) -> str:
     return r"\b" + re.escape(word) + (r"\b" if len(word) < STEM_LENGTH else "")
 
 
-def _rg(literal: str, repos: list, stems: bool = False) -> set[str]:
+def _rg(literal: str, repos: list, stems: bool = False, deadline: float | None = None) -> set[str]:
     cmd = ["rg", "-l", "-i", "--no-messages", "--max-filesize", "1M"]
     cmd += ["-e", stem_pattern(literal)] if stems else ["-F", "-e", literal]
     for glob in SKIP_GLOBS:
         cmd += ["-g", glob]
     cmd += ["--"] + [r.path for r in repos]
-    out = subprocess.run(cmd, capture_output=True, text=True, timeout=RG_TIMEOUT, check=False).stdout
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=_left(deadline), check=False).stdout
+    except subprocess.TimeoutExpired:
+        raise SearchTimeout from None
     roots = {r.path: r.path for r in repos}
     return {o for o in (_owner(line, roots) for line in out.splitlines()) if o}
 
 
-def _walk(literal_set: list[str], repos: list, stems: bool = False) -> dict[str, set[str]]:
+def _walk(literal_set: list[str], repos: list, stems: bool = False, deadline: float | None = None) -> dict[str, set[str]]:
     """Fallback without ``rg``: shallow-first walk of each repo, head of each text file."""
     found: dict[str, set[str]] = {lit: set() for lit in literal_set}
     wanted = [(lit, re.compile(stem_pattern(lit.lower())) if stems else lit.lower()) for lit in literal_set]
@@ -103,6 +121,8 @@ def _walk(literal_set: list[str], repos: list, stems: bool = False) -> dict[str,
         for file in iter_files(Path(repo.path), MAX_DEPTH, MAX_FILES):
             if not left:
                 break
+            if deadline is not None:
+                _left(deadline)
             text = _read_text(file).lower()
             if not text:
                 continue
@@ -113,22 +133,25 @@ def _walk(literal_set: list[str], repos: list, stems: bool = False) -> dict[str,
     return found
 
 
-def _find(lit: str, repos: list, use_rg: bool, stems: bool) -> set[str]:
+def _find(lit: str, repos: list, use_rg: bool, stems: bool, deadline: float | None) -> set[str]:
     if use_rg:
         try:
-            return _rg(lit, repos, stems)
+            return _rg(lit, repos, stems, deadline)
+        except SearchTimeout:
+            raise
         except (OSError, subprocess.SubprocessError):
             pass
-    return _walk([lit], repos, stems)[lit]
+    return _walk([lit], repos, stems, deadline)[lit]
 
 
 def locate(wanted: list[str], repos: list, use_rg: bool = True, cache: dict | None = None,
-           stems: bool = False) -> dict[str, set[str]]:
+           stems: bool = False, deadline: float | None = None) -> dict[str, set[str]]:
     """text -> paths of the repos whose files contain it (case-insensitive substring, or as stems: see
     ``stem_pattern``).
 
     ``cache`` (optional, owned by the caller) remembers answers per (text, repo), so typing a prompt letter
-    by letter in the launcher searches each word once."""
+    by letter in the launcher searches each word once. ``deadline`` (``time.monotonic()`` value) bounds the
+    time: ``SearchTimeout`` is raised when it passes, and what was found so far is already in the cache."""
     if not wanted or not repos:
         return {}
     cache = cache if cache is not None else {}
@@ -137,7 +160,7 @@ def locate(wanted: list[str], repos: list, use_rg: bool = True, cache: dict | No
         key = (lit.lower(), stems)
         missing = [r for r in repos if (key, r.path) not in cache]
         if missing:
-            found = _find(lit, missing, use_rg, stems)
+            found = _find(lit, missing, use_rg, stems, deadline)
             for r in missing:
                 cache[(key, r.path)] = r.path in found
         out[lit] = {r.path for r in repos if cache[(key, r.path)]}
@@ -145,10 +168,10 @@ def locate(wanted: list[str], repos: list, use_rg: bool = True, cache: dict | No
 
 
 def search(wanted: list[str], repos: list, use_rg: bool = True, cache: dict | None = None,
-           broad_limit: int | None = None) -> dict[str, list[str]]:
+           broad_limit: int | None = None, deadline: float | None = None) -> dict[str, list[str]]:
     """repo path -> identifiers it contains. Identifiers found in most repos are dropped, and so are the
     plain hyphenated names (``phenix-cli``) found in more than ``broad_limit`` repos: too common to pick one."""
-    by_literal = locate(wanted, repos, use_rg, cache)
+    by_literal = locate(wanted, repos, use_rg, cache, deadline=deadline)
     if not by_literal:
         return {}
     too_common = ubiquitous(
@@ -165,10 +188,14 @@ def search(wanted: list[str], repos: list, use_rg: bool = True, cache: dict | No
     return hits
 
 
-def find_hits(prompt: str, repos: list, cfg: Config, cache: dict | None = None) -> dict[str, list[str]]:
+def find_hits(prompt: str, repos: list, cfg: Config, cache: dict | None = None,
+              deadline: float | None = None) -> dict[str, list[str]]:
     """Repos that contain identifiers from the prompt (repo names themselves are not searched)."""
     if not cfg.grep_enabled:
         return {}
     known = {normalize(i) for r in repos for i in (r.identities + [r.name])}
     wanted = [lit for lit in literals(prompt, cfg.grep_max_literals) if normalize(lit) not in known]
-    return search(wanted, repos, cache=cache, broad_limit=cfg.max_repos)
+    try:
+        return search(wanted, repos, cache=cache, broad_limit=cfg.max_repos, deadline=deadline)
+    except SearchTimeout:
+        return {}   # out of time: no help from the files this round, the next one resumes from the cache

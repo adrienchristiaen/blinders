@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .config import Config
-from .grep import locate
+from .grep import SearchTimeout, locate
 from .text import MIN_REPOS_FOR_UBIQUITY, stem, tokens
 
 if TYPE_CHECKING:
@@ -29,7 +29,7 @@ MIN_GENERIC = 3                      # ...(and of more than this many) is everyd
 
 
 def verify(prompt: str, choices: list[Choice], cfg: Config, cache: dict | None = None,
-           everyone: list | None = None) -> tuple[list[Choice], list[tuple[Choice, str]]]:
+           everyone: list | None = None, deadline: float | None = None) -> tuple[list[Choice], list[tuple[Choice, str]]]:
     """(kept, [(dropped choice, reason)]). Nothing is dropped when the prompt gives no word to look for."""
     if not cfg.verify_enabled or not choices:
         return choices, []
@@ -43,11 +43,14 @@ def verify(prompt: str, choices: list[Choice], cfg: Config, cache: dict | None =
     if not words:
         return choices, []
     repos = [c.repo for c in choices]
-    where = locate(words, repos, cache=cache, stems=True)
-    if everyone and len(everyone) >= MIN_REPOS_FOR_UBIQUITY:
-        wide = locate(words, everyone, cache=cache, stems=True)
-        limit = max(MIN_GENERIC, GENERIC_SHARE * len(everyone))
-        where = {w: p for w, p in where.items() if len(wide[w]) <= limit}
+    try:
+        where = locate(words, repos, cache=cache, stems=True, deadline=deadline)
+        if everyone and len(everyone) >= MIN_REPOS_FOR_UBIQUITY:
+            wide = locate(words, everyone, cache=cache, stems=True, deadline=deadline)
+            limit = max(MIN_GENERIC, GENERIC_SHARE * len(everyone))
+            where = {w: p for w, p in where.items() if len(wide[w]) <= limit}
+    except SearchTimeout:
+        return choices, []   # out of time: judge nothing rather than judge on half an answer
     if len(repos) >= MIN_FOR_COMMON:
         where = {w: p for w, p in where.items() if len(p) < len(repos)}
     kept: list[Choice] = []

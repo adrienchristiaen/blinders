@@ -295,6 +295,28 @@ class UiTests(unittest.TestCase):
                 self.assertEqual(self.selected(app, "repos"), ["beta"])
         run(go())
 
+    def test_validating_never_runs_the_slow_pass_on_the_screen_thread(self):
+        import threading
+
+        calls = []
+
+        class Spy(Fake):
+            def plan(self, cli, prompt, deep=True):
+                calls.append((deep, threading.current_thread() is threading.main_thread()))
+                return fake_plan(cli, prompt)
+
+        async def go():
+            app = self.app()
+            app.backend = Spy()
+            async with app.run_test(size=(130, 40)) as pilot:
+                await self.selecting(pilot)
+                calls.clear()
+                app.query_one("#prompt", TextArea).text = "fix beta"
+                app._begin_map()      # Enter pressed before any timer could fire
+                await pilot.pause(0.2)
+                self.assertNotIn((True, True), calls)   # no deep pass on the main thread
+        run(go())
+
     def test_manual_choice_survives_a_new_prompt(self):
         async def go():
             app = self.app("alpha")

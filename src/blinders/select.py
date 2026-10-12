@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+import time
 from dataclasses import dataclass, replace
 
 from .config import Config
@@ -198,11 +199,11 @@ def neighbors(seeds: list[Repo], repos: list[Repo], cfg: Config) -> list[tuple[R
 
 
 def _verified(prompt: str, p: Plan, cfg: Config, forced: list[Repo] | None, deep: bool, cache: dict | None,
-              repos: list[Repo]) -> Plan:
+              repos: list[Repo], deadline: float | None) -> Plan:
     """Second pass (see ``verify.py``): chosen repos whose files do not mention the prompt are only listed."""
     if forced is not None or not deep:
         return p
-    kept, dropped = verify(prompt, p.opened, cfg, cache, repos)
+    kept, dropped = verify(prompt, p.opened, cfg, cache, repos, deadline)
     if not dropped:
         return p
     listed = [Related(c.repo, c.score, why, opens=False) for c, why in dropped] + p.related
@@ -228,12 +229,13 @@ def plan(
     ``deep=False`` skips the two passes that read file contents (identifier search, verification): instant,
     for the launcher while you type. ``cache`` is passed to them so that repeated calls reuse answers.
     """
+    deadline = time.monotonic() + cfg.deep_budget if cfg.deep_budget > 0 else None
     if forced is not None:
         seeds = [Choice(r, NAME_BONUS, "requested", kind="named") for r in forced]
     else:
-        seeds = with_hits(select(prompt, repos, cfg), find_hits(prompt, repos, cfg, cache) if deep else {}, repos, cfg)
+        seeds = with_hits(select(prompt, repos, cfg), find_hits(prompt, repos, cfg, cache, deadline) if deep else {}, repos, cfg)
     if not seeds or related == "none":
-        return _verified(prompt, Plan(seeds, []), cfg, forced, deep, cache, repos)
+        return _verified(prompt, Plan(seeds, []), cfg, forced, deep, cache, repos, deadline)
     seed_names = {s for seed in seeds for s in stems(seed.repo.name)}
     affinity = {c.repo.path: c.score for c in rank(prompt, repos, ignore=seed_names)}   # a link is already evidence: one word completes it
     opened = list(seeds)
@@ -247,4 +249,4 @@ def plan(
             opened.append(Choice(repo, weight, reason, kind="related" if related == "auto" else "asked"))
         elif len(listed) < cfg.max_related_list:
             listed.append(Related(repo, weight, why, opens=False))
-    return _verified(prompt, Plan(opened, listed), cfg, forced, deep, cache, repos)
+    return _verified(prompt, Plan(opened, listed), cfg, forced, deep, cache, repos, deadline)

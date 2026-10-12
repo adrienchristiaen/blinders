@@ -405,7 +405,7 @@ class BlindApp(App[UiResult | None]):
             for timer in (self._timer, self._deep_timer):
                 if timer is not None:
                     timer.stop()
-            self._apply(self.cli, prompt, self.backend.plan(self.cli, prompt, True), True)
+            self._apply(self.cli, prompt, self.backend.plan(self.cli, prompt, False), False)   # quick: never the slow pass on this thread
         self.phase = "map"
         repos = self._picked("repos")
         st = self.steps[3]
